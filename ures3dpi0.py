@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import csv
 import glob
-import uresnet
+import uresnet3d
 import time
 import pdb
 from matplotlib.mlab import PCA
@@ -523,7 +523,7 @@ def accuracy(output, target, imgdata):
                                                             
 
 
-net = uresnet.UResNet(inplanes=16,input_channels=1,num_classes=3,showsizes=True)
+net = uresnet3d.UResNet(inplanes=16,input_channels=1,num_classes=3,showsizes=True)
 # uncomment dump network definition
 # print ("net: "+str(net))
 

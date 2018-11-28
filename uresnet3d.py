@@ -19,11 +19,11 @@ import pdb
 ###########################################################
 
 
-def conv2x2(in_planes, out_planes, stride=1):
-    """2x2 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,padding=1, bias=False)
+def conv3x3(in_planes, out_planes, stride=1):
+    """3x3 convolution with padding"""
+#    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,padding=1, bias=False)
 #    pdb.set_trace()
-#    return nn.Conv3d(in_planes, out_planes, kernel_size=3, stride=stride,padding=1, bias=False)
+    return nn.Conv3d(in_planes, out_planes, kernel_size=3, stride=stride,padding=1, bias=False)
                      
 
 class BasicBlock(nn.Module):
@@ -31,11 +31,11 @@ class BasicBlock(nn.Module):
 
     def __init__(self, inplanes, planes, stride=1, downsample=None):
         super(BasicBlock, self).__init__()
-        self.conv1 = conv2x2(inplanes, planes, stride)
+        self.conv1 = conv3x3(inplanes, planes, stride)
         self.bn1 = nn.BatchNorm3d(planes)
         self.relu = nn.ReLU(inplace=True)
-        self.conv2 = conv2x2(planes, planes)
-        self.bn2 = nn.BatchNorm2d(planes)
+        self.conv2 = conv3x3(planes, planes)
+        self.bn2 = nn.BatchNorm3d(planes)
         self.downsample = downsample
         self.stride = stride
 
@@ -64,20 +64,20 @@ class Bottleneck(nn.Module):
         super(Bottleneck, self).__init__()
 
         # residual path
-        self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv1 = nn.Conv3d(inplanes, planes, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm3d(planes)
         
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.conv2 = nn.Conv3d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
                                
-        self.bn2 = nn.BatchNorm2d(planes)
-        self.conv3 = nn.Conv2d(planes, planes, kernel_size=1, bias=False)
-        self.bn3 = nn.BatchNorm2d(planes)
+        self.bn2 = nn.BatchNorm3d(planes)
+        self.conv3 = nn.Conv3d(planes, planes, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm3d(planes)
         self.relu = nn.ReLU(inplace=True)
         self.stride = stride
 
         # if stride >1, then we need to subsamble the input
         if stride>1:
-            self.shortcut = nn.Conv2d(inplanes,planes,kernel_size=1,stride=stride,bias=False)
+            self.shortcut = nn.Conv3d(inplanes,planes,kernel_size=1,stride=stride,bias=False)
         else:
             self.shortcut = None
             
@@ -121,7 +121,7 @@ class ConvTransposeLayer(nn.Module):
     def __init__(self,inplanes,outplanes,stride=2):
         super(ConvTransposeLayer,self).__init__()
         self.res    = Bottleneck(inplanes,inplanes,stride=1)
-        self.deconv = nn.ConvTranspose2d( inplanes, outplanes, kernel_size=3, stride=2, padding=1, bias=False )
+        self.deconv = nn.ConvTranspose3d( inplanes, outplanes, kernel_size=3, stride=2, padding=1, bias=False )
     def forward(self,x,output_size):
         out = self.res(x)
         out = self.deconv(out,output_size=output_size)
@@ -144,16 +144,16 @@ class UResNet(nn.Module):
         #self.relu1 = nn.ReLU(inplace=True)        
 
         # 7x7 = (3x3)^3
-        self.conv1 = nn.Conv2d(input_channels, self.inplanes, kernel_size=3, stride=1, padding=1, bias=True) # initial conv layer
-        self.bn1 = nn.BatchNorm2d(self.inplanes)
+        self.conv1 = nn.Conv3d(input_channels, self.inplanes, kernel_size=3, stride=1, padding=1, bias=True) # initial conv layer
+        self.bn1 = nn.BatchNorm3d(self.inplanes)
         self.relu1 = nn.ReLU(inplace=True)        
 
-        self.conv2 = nn.Conv2d(self.inplanes, self.inplanes, kernel_size=3, stride=1, padding=1, bias=True) # initial conv layer
-        self.bn2 = nn.BatchNorm2d(self.inplanes)
+        self.conv2 = nn.Conv3d(self.inplanes, self.inplanes, kernel_size=3, stride=1, padding=1, bias=True) # initial conv layer
+        self.bn2 = nn.BatchNorm3d(self.inplanes)
         self.relu2 = nn.ReLU(inplace=True)        
 
-        self.conv3 = nn.Conv2d(self.inplanes, self.inplanes, kernel_size=3, stride=1, padding=1, bias=True) # initial conv layer
-        self.bn3 = nn.BatchNorm2d(self.inplanes)
+        self.conv3 = nn.Conv3d(self.inplanes, self.inplanes, kernel_size=3, stride=1, padding=1, bias=True) # initial conv layer
+        self.bn3 = nn.BatchNorm3d(self.inplanes)
         self.relu3 = nn.ReLU(inplace=True)        
         
         self.enc_layer1 = self._make_encoding_layer( self.inplanes*1, self.inplanes*2,  stride=2)
@@ -168,30 +168,30 @@ class UResNet(nn.Module):
         
         # final conv stem (7x7) = (3x3)^3
         self.nkernels = 16
-        self.conv10 = nn.Conv2d(self.inplanes, self.nkernels, kernel_size=3, stride=1, padding=1, bias=True) # initial conv layer
-        self.bn10   = nn.BatchNorm2d(self.nkernels)
+        self.conv10 = nn.Conv3d(self.inplanes, self.nkernels, kernel_size=3, stride=1, padding=1, bias=True) # initial conv layer
+        self.bn10   = nn.BatchNorm3d(self.nkernels)
         self.relu10 = nn.ReLU(inplace=True)
 
-        self.conv11 = nn.Conv2d(self.nkernels, self.nkernels*2, kernel_size=3, stride=1, padding=1, bias=True) # initial conv layer
-        self.bn11   = nn.BatchNorm2d(self.nkernels*2)
+        self.conv11 = nn.Conv3d(self.nkernels, self.nkernels*2, kernel_size=3, stride=1, padding=1, bias=True) # initial conv layer
+        self.bn11   = nn.BatchNorm3d(self.nkernels*2)
         self.relu11 = nn.ReLU(inplace=True)
 
-        self.conv12 = nn.Conv2d(self.nkernels*2, self.nkernels, kernel_size=3, stride=1, padding=1, bias=True) # initial conv layer
-        self.bn12   = nn.BatchNorm2d(self.nkernels)
+        self.conv12 = nn.Conv3d(self.nkernels*2, self.nkernels, kernel_size=3, stride=1, padding=1, bias=True) # initial conv layer
+        self.bn12   = nn.BatchNorm3d(self.nkernels)
         self.relu12 = nn.ReLU(inplace=True)
         
         # perceptron
-        self.conv13 = nn.Conv2d(self.nkernels, num_classes, kernel_size=1, stride=1, padding=0, bias=True) # initial conv layer
+        self.conv13 = nn.Conv3d(self.nkernels, num_classes, kernel_size=1, stride=1, padding=0, bias=True) # initial conv layer
 
         # we use log softmax in order to more easily pair it with 
         self.softmax = nn.LogSoftmax(dim=1) # should return [b,c=3,h,w], normalized over, c dimension
         
         # initialization
         for m in self.modules():
-            if isinstance(m, nn.Conv2d) or isinstance(m,nn.ConvTranspose3d):
+            if isinstance(m, nn.Conv3d) or isinstance(m,nn.ConvTranspose3d):
                 n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
                 m.weight.data.normal_(0, math.sqrt(2. / n))
-            elif isinstance(m, nn.BatchNorm2d):
+            elif isinstance(m, nn.BatchNorm3d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
