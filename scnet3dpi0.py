@@ -1,30 +1,28 @@
-
-from torch.autograd import Variable
-from torch import optim
 import torch.nn as nn
-import torch.utils.data.distributed
+import torch as torch
+import math
+import torch.utils.model_zoo as model_zoo
 import horovod.torch as hvd
+import os, glob
 import numpy as np
-import torch
-import csv
-import glob
-import uresnet3d
-import time
 import pdb
-from matplotlib.mlab import PCA
-from matplotlib.patches import FancyArrowPatch
-from mpl_toolkits.mplot3d import proj3d
-## weird complaints about mkl trying to use below
-#from scipy import linalg
-from scipy.optimize import minimize
-from scipy.optimize import leastsq
 
-from mpi4py import MPI
-import gc
-import os
+###########################################################
+#
+# Sparse Semantic segmentation network used by MicroBooNE
+# to label (sub)dominant Energy gammas from pi0s.
+#
+# implementation from SCN example code (cite)
+#
+#
+###########################################################
+
 
 hvd.init()
 seed = 314159
+print("hvd.size() is: " + str(hvd.size()))
+print("hvd.local_rank() is: " + str(hvd.local_rank()))
+print("hvd.rank() is: " + str(hvd.rank()))
 
 print("Number of gpus per rank {:d}".format(torch.cuda.device_count()))
 # Horovod: pin GPU to local rank.
@@ -32,21 +30,10 @@ print("Number of gpus per rank {:d}".format(torch.cuda.device_count()))
 
 os.environ["CUDA_VISIBLE_DEVICES"] = str(hvd.local_rank())
 torch.cuda.manual_seed(seed)
+dtype = 'torch.cuda.FloatTensor' 
+dtypei = 'torch.cuda.LongTensor' 
 
-#### Note to self: get to this bit later.
-# Horovod: use DistributedSampler to partition the training data.
-#train_sampler = torch.utils.data.distributed.DistributedSampler(
-#    train_dataset, num_replicas=hvd.size(), rank=hvd.rank())
-#train_loader = torch.utils.data.DataLoader(
-#    train_dataset, batch_size=args.batch_size, sampler=train_sampler, **kwargs)
-
-# Horovod: use DistributedSampler to partition the test data.
-#test_sampler = torch.utils.data.distributed.DistributedSampler(
-#    test_dataset, num_replicas=hvd.size(), rank=hvd.rank())
-#test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.test_batch_size,
-#                                          sampler=test_sampler, **kwargs)
-
-
+from matplotlib.patches import FancyArrowPatch
 class Arrow3D(FancyArrowPatch):
     def __init__(self, xs, ys, zs, *args, **kwargs):
         FancyArrowPatch.__init__(self, (0,0), (0,0), *args, **kwargs)
@@ -60,15 +47,19 @@ class Arrow3D(FancyArrowPatch):
                                                                     
 
 
-global_Nclass = 3 ## Not used.
+global_Nclass = 3 
 global_n_iterations_per_epoch = 20
-global_batch_size = 1 # 32
+global_batch_size = 4 # 32
 vox = 2 # int divisor of 250 and 600 and 200. Cubic voxel edge size in cm.
 nvox = int(200/vox) # num bins in each dimension 
+voxels = (int(250/vox),int(600/vox),int(250/vox) ) # These are 2x2x2cm^3 voxels
+
 plotted = np.zeros((8),dtype=bool) # 8 files 
 plotted = np.ones((59999),dtype=bool) # 
 
+from mpi4py import MPI
 print("hvd.size()/MPI_COMM_RANK are: " + str(hvd.size()) + "/" + str(MPI.COMM_WORLD.Get_size())) 
+
 
 # next 4 are globals
 fit_pi0 = True
@@ -103,6 +94,7 @@ def eigenFunc( ix,iy,iz, H):
     evals = evals[idx]
     return evals,evecs
 '''
+
 
 def minConFit(paramsIn, data1, data2): # note the unpacked tuple as passed in ..
     " first set of points "
@@ -157,61 +149,8 @@ def minConFit(paramsIn, data1, data2): # note the unpacked tuple as passed in ..
     return chi2
 
 
-def conFitDer(paramsIn,data1,data2):
-
-    " first set of points "
-    x1 = data1[0]
-    y1 = data1[1]
-    z1 = data1[2]
-    " second set of points "
-    x2 = data2[0]
-    y2 = data2[1]
-    z2 = data2[2]
-    Npts1 = x1.size
-    Npts2 = x2.size
-
-    der = np.zeros_like(paramsIn)
-    x01 = paramsIn[0]
-    y01 = paramsIn[1]
-    z01 = paramsIn[2]
-    x02 = paramsIn[3]
-    y02 = paramsIn[4]
-    z02 = paramsIn[5]
-    m1x = paramsIn[6]
-    m1y = paramsIn[7]
-    m1z = paramsIn[8]
-    m2x = paramsIn[9]
-    m2y = paramsIn[10]
-    m2z = paramsIn[11]
-
-    
-
-    chi21a = (z1 - m1z/m1x*(x1-x01)  - z01)**2. 
-    chi21b = (z1 - m1z/m1y*(y1-y01)  - z01)**2.
-    chi22a = (z2 - m2z/m2x*(x2-x02)  - z02)**2.
-    chi22b = (z2 - m2z/m2y*(y2-y02)  - z02)**2.
-    chi2Imp = (x01-x02)**2. + (y01-y02)**2. + (z01-z02)**2.
 
 
-    
-    der[0] = (2*np.sqrt(chi21a)*(m1z/m1x)).sum() + 2*(x01-x02)
-    der[1] = (2*np.sqrt(chi21b)*(m1z/m1y)).sum() + 2*(y01-y02)
-    der[2] = ((2*np.sqrt(chi21a) + np.sqrt(chi21b))*(-1)).sum() + 2*(z01-z02)
-    der[3] = (2*np.sqrt(chi22a)*(m2z/m2x)).sum() - 2*(x01-x02)
-    der[4] = (2*np.sqrt(chi22b)*(m2z/m2y)).sum() - 2*(y01-y02)
-    der[5] = ((2*np.sqrt(chi22a) + np.sqrt(chi22b))*(-1)).sum() + 2*(z01-z02)
-
-    der[6] = (2*np.sqrt(chi21a)*m1z/m1x**2*(x1-x01)).sum()
-    der[7] = (2*np.sqrt(chi21b)*m1z/m1y**2*(y1-y01)).sum()
-    der[8] = (2*np.sqrt(chi21a)/m1x*(x1-x01)).sum() + (2*np.sqrt(chi21b)/m1y*(y1-y01)).sum()
-    der[9] = (2*np.sqrt(chi22a)*m2z/m2x**2*(x2-x02)).sum()
-    der[10] = (2*np.sqrt(chi22b)*m2z/m2y**2*(y2-y02)).sum()
-    der[11] = (2*np.sqrt(chi22a)/m2x*(x2-x02)).sum() + (2*np.sqrt(chi22b)/m2y*(y2-y02)).sum()
-
-
-    return der
-
-    
 def vtxConFit( ix,iy,iz, H, H1, H2, e1, e2):
     indices = np.where(H1[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox])
     # Next step by indexing with indices array collapses all activity to be contiguous, no more empty gaps, which compresses xyz1 in space, which .nonzero() does not do.
@@ -252,13 +191,15 @@ def energyGamma( ix,iy,iz, Hg, H):
     E = H[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox][indices].sum()
     return E
 
+
+''' I'm  obsolescing this gen_waveform with DataLoader, and this will disappear soon ....'''
 def gen_waveform(n_iterations_per_epoch=10, mini_batch_size=6):
 
     Nclass = global_Nclass
 
     x = np.ndarray(shape=(mini_batch_size, 1, nvox, nvox, nvox))
     y = np.ndarray(shape=(mini_batch_size, ))
-    datapaths = "/ccs/home/echurch/dlpix-torch/dune-root3/*ana*"
+    datapaths = "/ccs/home/echurch/data/*ana*"
 
     elec2MeV = 42700   # mip electrons/MeV
     # birks = 0.65 # rough-rough recombination
@@ -296,8 +237,6 @@ def gen_waveform(n_iterations_per_epoch=10, mini_batch_size=6):
             zmin = np.argmin(dataT[:,2][dataT[:,2]>2])
             weights=current_file[current_index,]['sdElec'][current_file[current_index,]['sdTPC']==3]
             ##  view,chan,x
-
-            voxels = (int(250/vox),int(600/vox),int(250/vox) ) # These are 2x2x2cm^3 voxels
             
             H,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=weights)
 
@@ -491,7 +430,6 @@ def gen_waveform(n_iterations_per_epoch=10, mini_batch_size=6):
 
 
 
-        
 def accuracy(output, target, imgdata):
     """Computes the accuracy. we want the aggregate accuracy along with accuracies for the different labels. easiest to just use numpy..."""
     profile = False
@@ -572,22 +510,43 @@ def accuracy(output, target, imgdata):
     return res
                                                             
 
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.utils.data import DataLoader,Dataset
+import sparseconvnet as scn
+import time
+import sys
+import math
 
-net = uresnet3d.UResNet(inplanes=16,input_channels=1,num_classes=3,showsizes=True)
-# uncomment dump network definition
-# print ("net: "+str(net))
 
+dimension = 3
+reps = 1 #Conv block repetition factor
+m = 32 #Unet number of features
+nPlanes = [m, 2*m, 3*m, 4*m, 5*m] #UNet number of features per level
+
+class Model(nn.Module):
+    def __init__(self):
+        nn.Module.__init__(self)
+        self.sparseModel = scn.Sequential().add(
+            scn.InputLayer(dimension, torch.LongTensor([nvox]*3), mode=3)).add(
+           scn.SubmanifoldConvolution(dimension, 1, m, 3, False)).add(
+           scn.UNet(dimension, reps, nPlanes, residual_blocks=False, downsample=[2,2])).add(
+           scn.BatchNormReLU(m)).add(
+           scn.OutputLayer(dimension))
+        self.linear = nn.Linear(m, global_Nclass)
+    def forward(self,x):
+        x=self.sparseModel(x)
+        x=self.linear(x)
+        return x
+ 
+net = Model()
+# print(net) # this is lots of info
 Net = net.cuda()
 
 tensor_list = []
 for dev_idx in range(torch.cuda.device_count()):
     tensor_list.append(torch.FloatTensor([1]).cuda(dev_idx))
 
-##torch.distributed.all_reduce_multigpu(tensor_list)
-
-##torch.nn.parallel.DistributedDataParallel(Net, device_ids=hvd.local_rank(),output_device=hvd.local_rank())
-
-# load existing weights
 
 # Horovod: broadcast parameters.
 hvd.broadcast_parameters(net.state_dict(), root_rank=0)
@@ -595,19 +554,12 @@ hvd.broadcast_parameters(net.state_dict(), root_rank=0)
 
 try:
     print ("Reading weights from file")
-    net.load_state_dict(torch.load('./model-ures3dpi0.pkl'))
+    net.load_state_dict(torch.load('./model-scn3dpi0.pkl'))
     net.eval()
     print("Succeeded.")
 except:
-    print ("Failed to read pkl model. Proceeding without it.")
+    print ("Failed to read pkl model. Proceeding from scratch.")
 #    raise 
-
-
-#loss = nn.BCELoss().cuda()
-#loss = nn.CrossEntropyLoss().cuda()
-
-# create loss function
-# Loss Function
 
 # Next two functions taken from Taritree's train_wlarcv1.py
 # We define a pixel wise L2 loss
@@ -651,30 +603,124 @@ learning_rate = 0.001 # 0.010
 optimizer = optim.SGD(net.parameters(), lr=learning_rate * hvd.size(),
                       momentum=0.9)
 # Horovod: wrap optimizer with DistributedOptimizer.
-compression = hvd.Compression.fp16 # don't use
+compression = hvd.Compression.none  # .fp16 # don't use compression
 optimizer = hvd.DistributedOptimizer(optimizer,
                                      named_parameters=net.named_parameters(),
                                      compression=hvd.Compression.none)  # to start
-
-
+hvd.broadcast_parameters(net.state_dict(), root_rank=0)
+hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
 lr_step = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.9) # lr drops to lr*0.9^N after 5N epochs
-val_gen = gen_waveform(n_iterations_per_epoch=global_n_iterations_per_epoch,mini_batch_size=global_batch_size)
+#val_gen = gen_waveform(n_iterations_per_epoch=global_n_iterations_per_epoch,mini_batch_size=global_batch_size)
 
+
+class BinnedDataset(Dataset):
+
+    def __init__(self, path, frac_train, train=True, thresh=3, transform=None):
+        """
+        Args:
+            csv_file (string): Path to the csv file with annotations.
+            root_dir (string): Directory with all the images.
+            transform (callable, optional): Optional transform to be applied
+                on a sample.
+        """
+        ftype = "*ana*"
+        self.files = [ i for i in glob.glob(path+"/"+ftype)]
+        dim3 = np.array(( nvox,nvox,nvox))
+        self.np_labels  = np.zeros( dim3, dtype=np.int )
+        self.np_weights = np.zeros( dim3, dtype=np.float32 )
+        self.frac_train = frac_train
+        self.valid_train = 1.0 - self.frac_train
+        self.train = train
+        self.path = path
+        self.thresh = thresh
+
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, idx):
+
+        x = np.ndarray(shape=( 1, nvox, nvox, nvox))
+
+        ind_file = idx
+#        print ("ind_file: " +str(ind_file)+ " self.files is " + str(self.files))
+        current_file = np.load(self.files[ind_file])
+        if self.train:
+            current_index = np.random.randint(int(current_file.shape[0]*self.frac_train), size=1)[0]
+        else:
+            current_index = np.random.randint(int(current_file.shape[0]*self.frac_train),int(current_file.shape[0]), size=1)[0]
+
+        data = np.array((current_file[current_index,]['sdX'][current_file[current_index,]['sdTPC']==3],current_file[current_index,]['sdY'][current_file[current_index,]['sdTPC']==3], current_file[current_index,]['sdZ'][current_file[current_index,]['sdTPC']==3] ))
+        dataT = data.T
+            
+        if dataT.sum() is 0:
+            print("Problem! Image is empty for current_index " + str(current_index))
+            raise
+            
+        xmin = np.argmin(dataT[:,0][dataT[:,0]>2])
+        ymin = np.argmin(dataT[:,1][dataT[:,1]>2])
+        zmin = np.argmin(dataT[:,2][dataT[:,2]>2])
+        weights=current_file[current_index,]['sdElec'][current_file[current_index,]['sdTPC']==3]
+        ##  view,chan,x
+
+        voxels = (int(250/vox),int(600/vox),int(250/vox) ) # These are 2x2x2cm^3 voxels
+            
+        H,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=weights)
+        
+        pixlabs1 = current_file[current_index,]['sdgamma1'][current_file[current_index,]['sdTPC']==3]
+        pixlabs2 = current_file[current_index,]['sdgamma2'][current_file[current_index,]['sdTPC']==3]
+
+        Hpl1,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=pixlabs1) # original pixel value 1
+        Hpl2,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=pixlabs2/2.) # original pixel value 2
+
+        (xmax,ymax,zmax) = np.unravel_index(np.argmax(H,axis=None),H.shape)
+        # Crop this back to central 2mx2mx2m about max activity point
+        ix = np.maximum(xmax-nvox/vox,0); ix = int(np.minimum(ix,voxels[0]-nvox))
+        iy = np.maximum(ymax-nvox/vox,0); iy = int(np.minimum(iy,voxels[1]-nvox))
+        iz = np.maximum(zmax-nvox/vox,0); iz = int(np.minimum(iz,voxels[2]-nvox))
+
+        x[0] = H[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox] # The 0th element is for 1st (only) layer.
+        self.np_labels = np.zeros(H[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox].shape)
+        indx1 = np.where(Hpl1[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox]!=0)
+        indx2 = np.where(Hpl2[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox]!=0)
+        self.np_labels[indx2] = 2 # Eg1 pixels
+
+        self.np_weights = self.np_labels.astype('bool').astype('int')
+        self.np_weights[self.np_weights==0] = 1.0/np.prod(Hpl1.shape)/1000.
+
+
+        return ( x[0], self.np_labels, self.np_weights )
+            
+
+        ''' Note that scn.InputLayer() expects 1 input layer not potentially N of them, so collapse x now.'''
+'''
+        return (torch.from_numpy(x.reshape((nvox,nvox,nvox))).float(),
+                torch.from_numpy(self.np_labels).long(),
+                torch.from_numpy(self.np_weights).float())
+'''
+
+
+binned_tdata = BinnedDataset(path='/ccs/home/echurch/pi0',frac_train=0.8,train=True)
+binned_vdata = BinnedDataset(path='/ccs/home/echurch/pi0',frac_train=0.8,train=False)
+
+import csv
 with open('history.csv','w') as csvfile:
     fieldnames = ['Iteration', 'Epoch', 'Train Loss',
                   'Validation Loss', 'Train Accuracy', 'Validation Accuracy', "Learning Rate"]
     history_writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
     history_writer.writeheader()
+    thresh = 3
 
     for epoch in range (15):  # (400)
-        train_gen = gen_waveform(n_iterations_per_epoch=global_n_iterations_per_epoch,mini_batch_size=global_batch_size)
+#        train_gen = gen_waveform(n_iterations_per_epoch=global_n_iterations_per_epoch,mini_batch_size=global_batch_size)
+
+        train_gen = DataLoader(dataset=binned_tdata, batch_size=global_batch_size,
+                               shuffle=False, num_workers=global_batch_size) #global_batch_size)
         lr_step.step()
 
-
-#### Note to self: get to this bit later.
-###    train_sampler.set_epoch(epoch)
         for iteration, minibatch in enumerate(train_gen):
+
             net.train()
 #            torch.distributed.init_process_group(backend='nccl',
 #                                                 init_method='env://',
@@ -682,38 +728,45 @@ with open('history.csv','w') as csvfile:
 #                                                 rank = hvd.rank())
 
             optimizer.zero_grad()
-            x, labels_var, weight_var = minibatch
-            
-            yhat = net(x)
-#            pdb.set_trace()
-            train_loss = loss(yhat, labels_var, weight_var) 
+
+            feats, labels_var, weight_var = minibatch            
+
+            coords = np.argwhere(feats>thresh)
+            indspgen = feats>thresh
+
+            pdb.set_trace()
+            yhat = net([coords.type(dtypei),(feats[indspgen].type(dtype))])
+
+            train_loss = loss(yhat, labels_var[indspgen].type(dtypei), weight_var[indspgen].type(dtype)) 
             train_loss.backward()
 #            optimizer.synchronize()
             optimizer.step()
-#            train_accuracy = accuracy(y, yhat)
 
-# New memory outage on 2nd iteration problem fix, suggested at https://github.com/pytorch/pytorch/issues/4890
-            for p in net.parameters():
-                p.grad = None
 
-            train_accuracy = accuracy(yhat.data, labels_var.data, x)    # None)
+
+            ''' After some diagnostic period let's put this outside the Iteration loop'''
+            train_accuracy = accuracy(yhat.data, labels_var[indspgen].data, x)    # None)
             net.eval()
 
             print("Epoch: {}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g},{:.4g},{:.4g}]".format(epoch, iteration,float(train_loss.data), train_accuracy[0], train_accuracy[1], train_accuracy[2]))
-#            print("Epoch: {}, Iteration: {}, Loss: [{:.4g}]".format(epoch, iteration,float(train_loss.data[0])))
 
-            
+
+            val_gen = DataLoader(dataset=binned_vdata, batch_size=global_batch_size,
+                                 shuffle=True, num_workers=global_batch_size)
+                    
             try:
                 x,y,_ = next(val_gen)
             except StopIteration:
-                val_gen = gen_waveform(n_iterations_per_epoch=1,mini_batch_size=global_batch_size)
+#                val_gen = gen_waveform(n_iterations_per_epoch=1,mini_batch_size=global_batch_size)
+                val_gen = DataLoader(dataset=binned_vdata, batch_size=global_batch_size,
+                                     shuffle=True, num_workers=global_batch_size)
                 x,y,_ = next(val_gen)
                 print("re-upping the validation generator")
 
             yhat = net(x)
-            val_loss = loss(yhat, labels_var, weight_var).data
+            val_loss = loss(yhat, labels_var[indspgen], weight_var[indspgen]).data
 #            val_accuracy = accuracy(y, yhat)
-            val_accuracy = accuracy(yhat.data, labels_var.data, x)    # images_var.data)
+            val_accuracy = accuracy(yhat.data, labels_var[indspgen].data, x)    # images_var.data)
 
             print("Epoch: {}, Iteration: {}, Loss: [{:.4g},{:.4g}], *** Train Accuracy: [{:.4g},{:.4g},{:.4g}, ***,  Val Accuracy: [{:.4g},{:.4g},{:.4g}]".format(epoch, iteration,float(train_loss.data), val_loss, train_accuracy[0], train_accuracy[1], train_accuracy[2], val_accuracy[0], val_accuracy[1], val_accuracy[2]))
 
@@ -740,69 +793,6 @@ with open('history.csv','w') as csvfile:
         print("end of epoch")
 
 
-# The larger N in the below epoch==N the better stats in the mpi0,Epi0 plots, but also slower, cuz fits are slow and run for N epochs.
-# Once plot_pi0 is set True the fitting above is shut off and the Network training speeds up significantly.
-        plot_pi0 = False
-        if epoch==400:
-            plot_pi0 = True
-        if plot_pi0:
-            import matplotlib
-            matplotlib.use('Agg')
-            import matplotlib.pyplot as plt
 
-            counts,bin_edges = np.histogram(Epi,bins=np.arange(0.,5000.,100.0))
-            bin_centres = (bin_edges[:-1] + bin_edges[1:])/2.
-            plt.clf()
-            plt.hist(Epi,bins=np.arange(0.,5000.,100.0),facecolor='b', alpha=0.75)
-            plt.errorbar(bin_centres, counts, yerr=np.sqrt(counts), fmt='o')
-            plt.savefig("Epi.png")
-            plt.close()
+        torch.save(net.state_dict(), 'model-scn3dpi0.pkl')
 
-            counts,bin_edges = np.histogram(mpi_pca,bins=np.arange(0.,600.,10.0))
-            bin_centres = (bin_edges[:-1] + bin_edges[1:])/2.
-            plt.clf()
-            plt.hist(mpi_pca,bins=np.arange(0.,600.,10.0))
-            plt.errorbar(bin_centres, counts, yerr=np.sqrt(counts), fmt='o')
-            plt.savefig("mpi0_pca.png")
-            plt.close()
-
-            counts,bin_edges = np.histogram(mpi_constrained,bins=np.arange(0.,600.,10.0))
-            bin_centres = (bin_edges[:-1] + bin_edges[1:])/2.
-            plt.clf()
-            plt.hist(mpi_constrained,bins=np.arange(0.,600.,10.0))
-            plt.errorbar(bin_centres, counts, yerr=np.sqrt(counts),fmt='o')
-            plt.savefig("mpi0_constrained.png")
-            plt.close()
-            plot_pi0 = False
-            fit_pi0 = False
-
-            
-            counts,bin_edges = np.histogram(Epi_cuts,bins=np.arange(0.,5000.,100.0))
-            bin_centres = (bin_edges[:-1] + bin_edges[1:])/2.
-            plt.clf()
-            plt.hist(Epi_cuts,bins=np.arange(0.,5000.,100.0),facecolor='b', alpha=0.75)
-            plt.errorbar(bin_centres, counts, yerr=np.sqrt(counts), fmt='o')
-            plt.savefig("Epi_cuts.png")
-            plt.close()
-
-            counts,bin_edges = np.histogram(mpi_pca_cuts,bins=np.arange(0.,600.,10.0))
-            bin_centres = (bin_edges[:-1] + bin_edges[1:])/2.
-            plt.clf()
-            plt.hist(mpi_pca_cuts,bins=np.arange(0.,600.,10.0))
-            plt.errorbar(bin_centres, counts, yerr=np.sqrt(counts), fmt='o')
-            plt.savefig("mpi0_pca_cuts.png")
-            plt.close()
-
-            counts,bin_edges = np.histogram(mpi_constrained_cuts,bins=np.arange(0.,600.,10.0))
-            bin_centres = (bin_edges[:-1] + bin_edges[1:])/2.
-            plt.clf()
-            plt.hist(mpi_constrained_cuts,bins=np.arange(0.,600.,10.0))
-            plt.errorbar(bin_centres, counts, yerr=np.sqrt(counts),fmt='o')
-            plt.savefig("mpi0_constrained_cuts.png")
-            plt.close()
-            plot_pi0 = False
-            fit_pi0 = False
-
-        torch.save(net.state_dict(), 'model-ures3dpi0.pkl')
-
-        
