@@ -5,7 +5,9 @@ import torch.utils.model_zoo as model_zoo
 import horovod.torch as hvd
 import os, glob
 import numpy as np
+import threading
 import pdb
+
 
 ###########################################################
 #
@@ -634,63 +636,64 @@ class BinnedDataset(Dataset):
         self.train = train
         self.path = path
         self.thresh = thresh
-
+        self.lock = threading.Lock()
 
     def __len__(self):
         return len(self.files)
 
     def __getitem__(self, idx):
 
-        x = np.ndarray(shape=( 1, nvox, nvox, nvox))
+        with self.lock:
+            x = np.ndarray(shape=( 1, nvox, nvox, nvox))
 
-        ind_file = idx
-#        print ("ind_file: " +str(ind_file)+ " self.files is " + str(self.files))
-        current_file = np.load(self.files[ind_file])
-        if self.train:
-            current_index = np.random.randint(int(current_file.shape[0]*self.frac_train), size=1)[0]
-        else:
-            current_index = np.random.randint(int(current_file.shape[0]*self.frac_train),int(current_file.shape[0]), size=1)[0]
-
-        data = np.array((current_file[current_index,]['sdX'][current_file[current_index,]['sdTPC']==3],current_file[current_index,]['sdY'][current_file[current_index,]['sdTPC']==3], current_file[current_index,]['sdZ'][current_file[current_index,]['sdTPC']==3] ))
-        dataT = data.T
+            ind_file = idx
+            #        print ("ind_file: " +str(ind_file)+ " self.files is " + str(self.files))
+            current_file = np.load(self.files[ind_file])
+            if self.train:
+                current_index = np.random.randint(int(current_file.shape[0]*self.frac_train), size=1)[0]
+            else:
+                current_index = np.random.randint(int(current_file.shape[0]*self.frac_train),int(current_file.shape[0]), size=1)[0]
+                
+            data = np.array((current_file[current_index,]['sdX'][current_file[current_index,]['sdTPC']==3],current_file[current_index,]['sdY'][current_file[current_index,]['sdTPC']==3], current_file[current_index,]['sdZ'][current_file[current_index,]['sdTPC']==3] ))
+            dataT = data.T
             
-        if dataT.sum() is 0:
-            print("Problem! Image is empty for current_index " + str(current_index))
-            raise
+            if dataT.sum() is 0:
+                print("Problem! Image is empty for current_index " + str(current_index))
+                raise
             
-        xmin = np.argmin(dataT[:,0][dataT[:,0]>2])
-        ymin = np.argmin(dataT[:,1][dataT[:,1]>2])
-        zmin = np.argmin(dataT[:,2][dataT[:,2]>2])
-        weights=current_file[current_index,]['sdElec'][current_file[current_index,]['sdTPC']==3]
-        ##  view,chan,x
+            xmin = np.argmin(dataT[:,0][dataT[:,0]>2])
+            ymin = np.argmin(dataT[:,1][dataT[:,1]>2])
+            zmin = np.argmin(dataT[:,2][dataT[:,2]>2])
+            weights=current_file[current_index,]['sdElec'][current_file[current_index,]['sdTPC']==3]
+            ##  view,chan,x
 
-        voxels = (int(250/vox),int(600/vox),int(250/vox) ) # These are 2x2x2cm^3 voxels
+            voxels = (int(250/vox),int(600/vox),int(250/vox) ) # These are 2x2x2cm^3 voxels
             
-        H,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=weights)
-        
-        pixlabs1 = current_file[current_index,]['sdgamma1'][current_file[current_index,]['sdTPC']==3]
-        pixlabs2 = current_file[current_index,]['sdgamma2'][current_file[current_index,]['sdTPC']==3]
+            H,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=weights)
+            
+            pixlabs1 = current_file[current_index,]['sdgamma1'][current_file[current_index,]['sdTPC']==3]
+            pixlabs2 = current_file[current_index,]['sdgamma2'][current_file[current_index,]['sdTPC']==3]
 
-        Hpl1,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=pixlabs1) # original pixel value 1
-        Hpl2,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=pixlabs2/2.) # original pixel value 2
+            Hpl1,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=pixlabs1) # original pixel value 1
+            Hpl2,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=pixlabs2/2.) # original pixel value 2
 
-        (xmax,ymax,zmax) = np.unravel_index(np.argmax(H,axis=None),H.shape)
-        # Crop this back to central 2mx2mx2m about max activity point
-        ix = np.maximum(xmax-nvox/vox,0); ix = int(np.minimum(ix,voxels[0]-nvox))
-        iy = np.maximum(ymax-nvox/vox,0); iy = int(np.minimum(iy,voxels[1]-nvox))
-        iz = np.maximum(zmax-nvox/vox,0); iz = int(np.minimum(iz,voxels[2]-nvox))
+            (xmax,ymax,zmax) = np.unravel_index(np.argmax(H,axis=None),H.shape)
+            # Crop this back to central 2mx2mx2m about max activity point
+            ix = np.maximum(xmax-nvox/vox,0); ix = int(np.minimum(ix,voxels[0]-nvox))
+            iy = np.maximum(ymax-nvox/vox,0); iy = int(np.minimum(iy,voxels[1]-nvox))
+            iz = np.maximum(zmax-nvox/vox,0); iz = int(np.minimum(iz,voxels[2]-nvox))
 
-        x[0] = H[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox] # The 0th element is for 1st (only) layer.
-        self.np_labels = np.zeros(H[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox].shape)
-        indx1 = np.where(Hpl1[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox]!=0)
-        indx2 = np.where(Hpl2[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox]!=0)
-        self.np_labels[indx2] = 2 # Eg1 pixels
+            x[0] = H[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox] # The 0th element is for 1st (only) layer.
+            self.np_labels = np.zeros(H[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox].shape)
+            indx1 = np.where(Hpl1[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox]!=0)
+            indx2 = np.where(Hpl2[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox]!=0)
+            self.np_labels[indx2] = 2 # Eg1 pixels
 
-        self.np_weights = self.np_labels.astype('bool').astype('int')
-        self.np_weights[self.np_weights==0] = 1.0/np.prod(Hpl1.shape)/1000.
+            self.np_weights = self.np_labels.astype('bool').astype('int')
+            self.np_weights[self.np_weights==0] = 1.0/np.prod(Hpl1.shape)/1000.
 
 
-        return ( x[0], self.np_labels, self.np_weights )
+            return ( x[0], self.np_labels, self.np_weights )
             
 
         ''' Note that scn.InputLayer() expects 1 input layer not potentially N of them, so collapse x now.'''
@@ -731,12 +734,18 @@ with open('history.csv','w') as csvfile:
 
             feats, labels_var, weight_var = minibatch            
 
-            coords = np.argwhere(feats>thresh)
+            tmp = np.nonzero(feats>thresh)
+            # below 4-lines are torch-urous equivalent of numpy moveaxis to get batch indx on far right column.
+            coords = tmp
+            bno = coords[:,0].clone() # wo clone this won't copy, it seems.
+            coords[:,0:3] = tmp[:,1:4]
+            coords[:,3] = bno
+            pdb.set_trace()
+            
             indspgen = feats>thresh
 
-            pdb.set_trace()
-            yhat = net([coords.type(dtypei),(feats[indspgen].type(dtype))])
-
+            yhat = net([coords,feats[indspgen], global_batch_size])
+            
             train_loss = loss(yhat, labels_var[indspgen].type(dtypei), weight_var[indspgen].type(dtype)) 
             train_loss.backward()
 #            optimizer.synchronize()
