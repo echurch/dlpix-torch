@@ -59,8 +59,8 @@ voxels = (int(250/vox),int(600/vox),int(250/vox) ) # These are 2x2x2cm^3 voxels
 plotted = np.zeros((8),dtype=bool) # 8 files 
 plotted = np.ones((59999),dtype=bool) # 
 
-from mpi4py import MPI
-print("hvd.size()/MPI_COMM_RANK are: " + str(hvd.size()) + "/" + str(MPI.COMM_WORLD.Get_size())) 
+#from mpi4py import MPI
+#print("hvd.size()/MPI_COMM_RANK are: " + str(hvd.size()) + "/" + str(MPI.COMM_WORLD.Get_size())) 
 
 
 # next 4 are globals
@@ -454,13 +454,16 @@ def accuracy(output, target, imgdata):
     #print "pred ",pred.size()," iscuda=",pred.is_cuda
     #print "target ",target.size(), "iscuda=",target.is_cuda
     targetex = target.resize_( pred.size() ) # expanded view, should not include copy
-    correct = pred.eq( targetex ) # on gpu
+
+
+    correct = pred.eq( targetex.type(dtypei))  #.to(torch.device("cuda")) ) # on gpu
     #print "correct ",correct.size(), " iscuda=",correct.is_cuda    
     if profile:
         torch.cuda.synchronize()
         print ("time to calc correction matrix: "+str(time.time()-start)+" secs")
 
     # we want counts for elements wise
+
     num_per_class = {}
     corr_per_class = {}
     total_corr = 0
@@ -474,7 +477,7 @@ def accuracy(output, target, imgdata):
         classmat = targetex.eq(int(c)).long() # elements where class is labeled
         #print "classmat: ",classmat.size()," iscuda=",classmat.is_cuda
         num_per_class[c] = classmat.long().sum()
-        corr_per_class[c] = (correct.long()*classmat).long().sum() # mask by class matrix, then sum
+        corr_per_class[c] = (correct.long()*classmat.type(dtypei)).long().sum() # mask by class matrix, then sum
         total_corr += corr_per_class[c].long()
         total_pix  += num_per_class[c].long()
     print ("total_pix: " + str(total_pix))
@@ -525,6 +528,7 @@ dimension = 3
 reps = 1 #Conv block repetition factor
 m = 32 #Unet number of features
 nPlanes = [m, 2*m, 3*m, 4*m, 5*m] #UNet number of features per level
+nPlanes = [m, 2*m, 3*m] # My 100x100x100 resolution doesn't allow to go further than this.
 
 class Model(nn.Module):
     def __init__(self):
@@ -578,7 +582,8 @@ class PixelWiseNLLLoss(nn.modules.loss._WeightedLoss):
         super(PixelWiseNLLLoss,self).__init__(weight,size_average)
         self.ignore_index = ignore_index
         self.weight = weight
-        self.reduce = False
+        self.reduce = False # "mean" # False
+        self.size_average = size_average
 #        self.reduce = True
 
         self.mean = torch.mean # torch.mean.cuda() fails with 'has no attribute cuda" ....
@@ -740,11 +745,9 @@ with open('history.csv','w') as csvfile:
             bno = coords[:,0].clone() # wo clone this won't copy, it seems.
             coords[:,0:3] = tmp[:,1:4]
             coords[:,3] = bno
-            pdb.set_trace()
-            
             indspgen = feats>thresh
 
-            yhat = net([coords,feats[indspgen], global_batch_size])
+            yhat = net([coords,feats[indspgen].type(dtype).unsqueeze(1), global_batch_size])
             
             train_loss = loss(yhat, labels_var[indspgen].type(dtypei), weight_var[indspgen].type(dtype)) 
             train_loss.backward()
@@ -754,54 +757,54 @@ with open('history.csv','w') as csvfile:
 
 
             ''' After some diagnostic period let's put this outside the Iteration loop'''
-            train_accuracy = accuracy(yhat.data, labels_var[indspgen].data, x)    # None)
+            train_accuracy = accuracy(yhat, labels_var[indspgen], feats[indspgen])    # None)
             net.eval()
 
             print("Epoch: {}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g},{:.4g},{:.4g}]".format(epoch, iteration,float(train_loss.data), train_accuracy[0], train_accuracy[1], train_accuracy[2]))
 
 
-            val_gen = DataLoader(dataset=binned_vdata, batch_size=global_batch_size,
+        val_gen = DataLoader(dataset=binned_vdata, batch_size=global_batch_size,
                                  shuffle=True, num_workers=global_batch_size)
-                    
-            try:
-                x,y,_ = next(val_gen)
-            except StopIteration:
-#                val_gen = gen_waveform(n_iterations_per_epoch=1,mini_batch_size=global_batch_size)
-                val_gen = DataLoader(dataset=binned_vdata, batch_size=global_batch_size,
-                                     shuffle=True, num_workers=global_batch_size)
-                x,y,_ = next(val_gen)
-                print("re-upping the validation generator")
 
-            yhat = net(x)
-            val_loss = loss(yhat, labels_var[indspgen], weight_var[indspgen]).data
-#            val_accuracy = accuracy(y, yhat)
-            val_accuracy = accuracy(yhat.data, labels_var[indspgen].data, x)    # images_var.data)
+        for iteration, minibatch in enumerate(val_gen):
+            feats, labels_var, weight_var = minibatch            
+
+            tmp = np.nonzero(feats>thresh)
+            # below 4-lines are torch-urous equivalent of numpy moveaxis to get batch indx on far right column.
+            coords = tmp
+            bno = coords[:,0].clone() # wo clone this won't copy, it seems.
+            coords[:,0:3] = tmp[:,1:4]
+            coords[:,3] = bno
+            indspgen = feats>thresh
+
+            yhat = net([coords,feats[indspgen].type(dtype).unsqueeze(1), global_batch_size])
+            
+            val_loss = loss(yhat,labels_var[indspgen].type(dtypei), weight_var[indspgen].type(dtype)) 
+            #            val_accuracy = accuracy(y, yhat)
+            val_accuracy = accuracy(yhat, labels_var[indspgen], feats[indspgen])   
 
             print("Epoch: {}, Iteration: {}, Loss: [{:.4g},{:.4g}], *** Train Accuracy: [{:.4g},{:.4g},{:.4g}, ***,  Val Accuracy: [{:.4g},{:.4g},{:.4g}]".format(epoch, iteration,float(train_loss.data), val_loss, train_accuracy[0], train_accuracy[1], train_accuracy[2], val_accuracy[0], val_accuracy[1], val_accuracy[2]))
 
             
             #                if (iteration%1 ==0) and (iteration>0):
-
-#            for g in optimizer.param_groups:
-#                learning_rate = g['lr']
+                
+            #            for g in optimizer.param_groups:
+            #                learning_rate = g['lr']
             output = {'Iteration':iteration, 'Epoch':epoch, 'Train Loss': float(train_loss.data),
                       'Validation Loss':val_loss, 'Train Accuracy':train_accuracy, 'Validation Accuracy':val_accuracy, "Learning Rate":learning_rate}
             history_writer.writerow(output)
-            csvfile.flush()
+            break # Just do it once and pop out
 
-            hostname = "hidden"
-            try:
-                hostname = os.environ["HOSTNAME"]
-            except:
-                pass
-            print("host: hvd.rank()/hvd.local_rank() are: " + str(hostname) + ": " + str(hvd.rank())+"/"+str(hvd.local_rank()) ) 
+        csvfile.flush()
 
-            del train_loss, val_loss, train_accuracy, val_accuracy, output, yhat
-            gc.collect()
-
-        print("end of epoch")
+        hostname = "hidden"
+        try:
+            hostname = os.environ["HOSTNAME"]
+        except:
+            pass
+        print("host: hvd.rank()/hvd.local_rank() are: " + str(hostname) + ": " + str(hvd.rank())+"/"+str(hvd.local_rank()) ) 
 
 
-
-        torch.save(net.state_dict(), 'model-scn3dpi0.pkl')
+    print("end of epoch")
+    torch.save(net.state_dict(), 'model-scn3dpi0.pkl')
 
