@@ -177,15 +177,15 @@ class Model(nn.Module):
         nn.Module.__init__(self)
         self.sparseModel = scn.Sequential().add(
             scn.InputLayer(dimension, torch.LongTensor([nvox]*3), mode=3)).add(
-                scn.SubmanifoldConvolution(dimension, nPlanes, 16, 3, False).add(
-                    scn.SparseResNet(dimension, 16, [
-                        ['b', 16, 2, 1],
-                        ['b', 32, 2, 2],
-                        ['b', 48, 2, 2],
-                        ['b', 96, 2, 2]]),                )).add(
-                            scn.BatchNormReLU(sum(96))).add(
+                scn.SubmanifoldConvolution(dimension, nPlanes, 16, 3, False)).add(
+#                    scn.SparseResNet(dimension, 16, [
+#                        ['b', 16, 2, 1],
+#                        ['b', 32, 2, 2],
+#                        ['b', 48, 2, 2],
+#                        ['b', 96, 2, 2]]                )).add(
+                            scn.BatchNormReLU(16)).add(
                                 scn.OutputLayer(dimension))
-        self.linear = nn.Linear(96, global_Nclass)
+        self.linear = nn.Linear(16, global_Nclass)
     def forward(self,x):
         x=self.sparseModel(x)
         x=self.linear(x)
@@ -254,6 +254,7 @@ class BinnedDataset(Dataset):
                 on a sample.
         """
         ftype = "*ana*"
+
         self.files = [ i for i in glob.glob(path+"/"+ftype)]
         dim3 = np.array(( nvox,nvox,nvox))
         self.np_labels  = np.zeros( dim3, dtype=np.int )
@@ -272,15 +273,16 @@ class BinnedDataset(Dataset):
 
         with self.lock:
             x = np.ndarray(shape=( 1, nvox, nvox, nvox))
-
+#            print ("ind_file: " +str(idx)+ " self.files is " + str(self.files))
             ind_file = idx
-            #        print ("ind_file: " +str(ind_file)+ " self.files is " + str(self.files))
             current_file = np.load(self.files[ind_file])
             if self.train:
                 current_index = np.random.randint(int(current_file.shape[0]*self.frac_train), size=1)[0]
             else:
                 current_index = np.random.randint(int(current_file.shape[0]*self.frac_train),int(current_file.shape[0]), size=1)[0]
-                
+
+
+
             data = np.array((current_file[current_index,]['sdX'][current_file[current_index,]['sdTPC']==3],current_file[current_index,]['sdY'][current_file[current_index,]['sdTPC']==3], current_file[current_index,]['sdZ'][current_file[current_index,]['sdTPC']==3] ))
             dataT = data.T
             
@@ -346,7 +348,7 @@ with open('history.csv','w') as csvfile:
 #        train_gen = gen_waveform(n_iterations_per_epoch=global_n_iterations_per_epoch,mini_batch_size=global_batch_size)
 
         train_gen = DataLoader(dataset=binned_tdata, batch_size=global_batch_size,
-                               shuffle=False, num_workers=global_batch_size) #global_batch_size)
+                               shuffle=False, num_workers=1) ## global_batch_size) #global_batch_size)
         lr_step.step()
 
         for iteration, minibatch in enumerate(train_gen):
@@ -371,7 +373,7 @@ with open('history.csv','w') as csvfile:
 
             yhat = net([coords,feats[indspgen].type(dtype).unsqueeze(1), global_batch_size])
             
-            train_loss = loss(yhat, labels_var[indspgen].type(dtypei), weight_var[indspgen].type(dtype)) 
+            train_loss = loss(yhat, labels_var[indspgen].type(dtypei)) #, weight_var[indspgen].type(dtype)) 
             train_loss.backward()
 #            optimizer.synchronize()
             optimizer.step()
@@ -402,7 +404,7 @@ with open('history.csv','w') as csvfile:
 
             yhat = net([coords,feats[indspgen].type(dtype).unsqueeze(1), global_batch_size])
             
-            val_loss = loss(yhat,labels_var[indspgen].type(dtypei), weight_var[indspgen].type(dtype)) 
+            val_loss = loss(yhat,labels_var[indspgen].type(dtypei) ) #, weight_var[indspgen].type(dtype)) 
             #            val_accuracy = accuracy(y, yhat)
             val_accuracy = accuracy(yhat, labels_var[indspgen], feats[indspgen])   
 
