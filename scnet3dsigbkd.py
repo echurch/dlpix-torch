@@ -6,6 +6,7 @@ import horovod.torch as hvd
 import os, glob
 import numpy as np
 import threading
+import h5py
 import pdb
 
 '''
@@ -44,110 +45,26 @@ dtypei = 'torch.cuda.LongTensor'
 global_Nclass = 3 
 global_n_iterations_per_epoch = 20
 global_batch_size = 32
-vox = 2 # int divisor of 250 and 600 and 200. Cubic voxel edge size in cm.
-nvox = int(200/vox) # num bins in each dimension 
-voxels = (int(250/vox),int(600/vox),int(250/vox) ) # These are 2x2x2cm^3 voxels
-
-plotted = np.zeros((8),dtype=bool) # 8 files 
-plotted = np.ones((59999),dtype=bool) # 
-
-#from mpi4py import MPI
-#print("hvd.size()/MPI_COMM_RANK are: " + str(hvd.size()) + "/" + str(MPI.COMM_WORLD.Get_size())) 
-
-
-# next 4 are globals
-fit_pi0 = True
-Epi = np.empty([1])
-mpi_pca = np.empty([1])
-mpi_constrained = np.empty([1])
-Epi_cuts = np.empty([1])
-mpi_pca_cuts = np.empty([1])
-mpi_constrained_cuts = np.empty([1])
+vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
+nvox = int(1500/vox) # num bins in x,y dimension 
+nvoxz = int(3000/vox) # num bins in z dimension 
+voxels = (int(1500/vox),int(1500/vox),int(3000/vox) ) # These are 1x1x1cm^3 voxels
 
 
 
-
-
-
-def accuracy(output, target, imgdata):
+def accuracy(output, target):
     """Computes the accuracy. we want the aggregate accuracy along with accuracies for the different labels. easiest to just use numpy..."""
     profile = False
-    # needs to be as gpu as possible!
+
     maxk = 1
-
-
     batch_size = target.size(0)
-    if profile:
-        torch.cuda.synchronize()
-        start = time.time()    
-    #_, pred = output.topk(maxk, 1, True, False) # on gpu. slow AF
     _, pred = output.max( 1, keepdim=False) # on gpu
-    if profile:
-        torch.cuda.synchronize()
-        print ("time for topk: "+str(time.time()-start)+" secs")
-
-    if profile:
-        start = time.time()
-    #print "pred ",pred.size()," iscuda=",pred.is_cuda
-    #print "target ",target.size(), "iscuda=",target.is_cuda
     targetex = target.resize_( pred.size() ) # expanded view, should not include copy
-
-
     correct = pred.eq( targetex.type(dtypei))  #.to(torch.device("cuda")) ) # on gpu
     #print "correct ",correct.size(), " iscuda=",correct.is_cuda    
-    if profile:
-        torch.cuda.synchronize()
-        print ("time to calc correction matrix: "+str(time.time()-start)+" secs")
 
-    # we want counts for elements wise
-
-    num_per_class = {}
-    corr_per_class = {}
-    total_corr = 0
-    total_pix  = 0
-
-    if profile:
-        torch.cuda.synchronize()            
-        start = time.time()
-    for c in range(output.size(1)):
-        # loop over classes
-        classmat = targetex.eq(int(c)).long() # elements where class is labeled
-        #print "classmat: ",classmat.size()," iscuda=",classmat.is_cuda
-        num_per_class[c] = classmat.long().sum()
-        corr_per_class[c] = (correct.long()*classmat.type(dtypei)).long().sum() # mask by class matrix, then sum
-        total_corr += corr_per_class[c].long()
-        total_pix  += num_per_class[c].long()
-    print ("total_pix: " + str(total_pix))
-    print ("total_corr: " + str(total_corr))
-
-    if profile:
-        torch.cuda.synchronize()                
-        print ("time to reduce: "+str(time.time()-start)+" secs")
-        
     # make result vector
-    res = []
-
-
-
-    for c in range(output.size(1)):
-        if num_per_class[c]>0:
-            res.append( float(corr_per_class[c])/float(num_per_class[c])*100.0 )
-        else:
-            res.append( 0.0 )
-
-    # totals
-    if total_pix==0:
-        res.append(0.0)
-        print ("Mysteriously in here - total_pix: " +str(total_pix)  )
-    else:
-        res.append( 100.0*float(total_corr)/float(total_pix) )
-
-
-    if num_per_class[1]==0 and num_per_class[2]==0:
-        res.append(0.0)
-        print ("Mysteriously in here: num-per-class" +str(num_per_class[1]) +", " +str(num_per_class[2]) )
-    else:
-        res.append( 100.0*float(corr_per_class[1]+corr_per_class[2])/float(num_per_class[1]+num_per_class[2]) ) # track/shower acc
+    res = correct.sum()/len(correct)
 
     return res
                                                             
@@ -177,18 +94,21 @@ class Model(nn.Module):
         nn.Module.__init__(self)
         self.sparseModel = scn.Sequential().add(
             scn.InputLayer(dimension, torch.LongTensor([nvox]*3), mode=3)).add(
-                scn.SubmanifoldConvolution(dimension, nPlanes, 16, 3, False)).add(
-#                    scn.SparseResNet(dimension, 16, [
-#                        ['b', 16, 2, 1],
-#                        ['b', 32, 2, 2],
-#                        ['b', 48, 2, 2],
-#                        ['b', 96, 2, 2]]                )).add(
-                            scn.BatchNormReLU(16)).add(
-                                scn.OutputLayer(dimension))
-        self.linear = nn.Linear(16, global_Nclass)
+                scn.SubmanifoldConvolution(dimension, nPlanes, 18, 3, False)).add(
+            scn.MaxPooling(2, 3, 2)).add(
+            scn.SparseResNet(2, 8, [
+                        ['b', 8, 2, 1],
+                        ['b', 16, 2, 2],
+                        ['b', 24, 2, 2],
+                        ['b', 32, 2, 2]])).add(
+            scn.Convolution(2, 32, 64, 5, 1, False)).add(
+            scn.BatchNormReLU(64)).add(
+            scn.SparseToDense(2, 64))
+#        self.spatial_size = self.sparseModel.input_spatial_size(torch.LongTensor([1, 1]))
+        self.linear = nn.Linear(64, global_Nclass)
     def forward(self,x):
-        x=self.sparseModel(x)
-        x=self.linear(x)
+        x = self.sparseModel(x)
+        x = self.linear(x)
         return x
  
 net = Model()
@@ -256,9 +176,9 @@ class BinnedDataset(Dataset):
         ftype = "*ana*"
 
         self.files = [ i for i in glob.glob(path+"/"+ftype)]
-        dim3 = np.array(( nvox,nvox,nvox))
-        self.np_labels  = np.zeros( dim3, dtype=np.int )
-        self.np_weights = np.zeros( dim3, dtype=np.float32 )
+        dim3 = np.array(( nvox,nvox,nvoxz))
+        self.np_labels  = np.zeros( 2, dtype=np.int )
+
         self.frac_train = frac_train
         self.valid_train = 1.0 - self.frac_train
         self.train = train
@@ -272,69 +192,62 @@ class BinnedDataset(Dataset):
     def __getitem__(self, idx):
 
         with self.lock:
-            x = np.ndarray(shape=( 1, nvox, nvox, nvox))
-#            print ("ind_file: " +str(idx)+ " self.files is " + str(self.files))
-            ind_file = idx
-            current_file = np.load(self.files[ind_file])
+            x = np.ndarray(shape=( 1, nvox, nvox, nvoxz))
+            print ("ind_file: " +str(idx)+ " self.files is " + str(self.files))
+
+            ind_file = idx #np.random.randint(int(len(self.files)),size=1)[0]
+            current_file = h5py.File(self.files[ind_file])
+            sigbkd = "bb0" in current_file
+            self.np_labels = 0
+            if (sigbkd):
+                self.np_labels = 1
+
+
+            extentset = current_file['MC']['extents']
+
             if self.train:
-                current_index = np.random.randint(int(current_file.shape[0]*self.frac_train), size=1)[0]
+                current_index = np.random.randint(int(extentset[-1][0]*self.frac_train), size=1)[0]
             else:
-                current_index = np.random.randint(int(current_file.shape[0]*self.frac_train),int(current_file.shape[0]), size=1)[0]
+                current_index = np.random.randint(int(extentset[-1][0]*self.frac_train),int(extentset[-1][0]), size=1)[0]
 
+            hitset = current_file['MC']['hits'][current_index]            
 
-
-            data = np.array((current_file[current_index,]['sdX'][current_file[current_index,]['sdTPC']==3],current_file[current_index,]['sdY'][current_file[current_index,]['sdTPC']==3], current_file[current_index,]['sdZ'][current_file[current_index,]['sdTPC']==3] ))
+            data = np.array(hitset['hitposition'][:,0]+750.,hitset['hitposition'][:,1]+750.,hitset['hitposition'][:,2]+1500.)
             dataT = data.T
             
             if dataT.sum() is 0:
                 print("Problem! Image is empty for current_index " + str(current_index))
                 raise
             
-            xmin = np.argmin(dataT[:,0][dataT[:,0]>2])
-            ymin = np.argmin(dataT[:,1][dataT[:,1]>2])
-            zmin = np.argmin(dataT[:,2][dataT[:,2]>2])
-            weights=current_file[current_index,]['sdElec'][current_file[current_index,]['sdTPC']==3]
+            xmin = np.argmin(dataT[:,0])
+            ymin = np.argmin(dataT[:,1])
+            zmin = np.argmin(dataT[:,2])
+            weights=hitset['hit_energy']
             ##  view,chan,x
 
-            voxels = (int(250/vox),int(600/vox),int(250/vox) ) # These are 2x2x2cm^3 voxels
+            voxels = (int(15000/vox),int(1500/vox),int(3000/voxz) ) # These are 1x1x1cm^3 voxels
             
             H,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=weights)
-            
-            pixlabs1 = current_file[current_index,]['sdgamma1'][current_file[current_index,]['sdTPC']==3]
-            pixlabs2 = current_file[current_index,]['sdgamma2'][current_file[current_index,]['sdTPC']==3]
+# Try to use whole pixelated volume now with scn. EC, 15-Apr-2019.
+            return ( H, self.np_labels )
 
-            Hpl1,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=pixlabs1) # original pixel value 1
-            Hpl2,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=pixlabs2/2.) # original pixel value 2
 
+
+'''
             (xmax,ymax,zmax) = np.unravel_index(np.argmax(H,axis=None),H.shape)
             # Crop this back to central 2mx2mx2m about max activity point
             ix = np.maximum(xmax-nvox/vox,0); ix = int(np.minimum(ix,voxels[0]-nvox))
             iy = np.maximum(ymax-nvox/vox,0); iy = int(np.minimum(iy,voxels[1]-nvox))
-            iz = np.maximum(zmax-nvox/vox,0); iz = int(np.minimum(iz,voxels[2]-nvox))
+            iz = np.maximum(zmax-nvoxz/vox,0); iz = int(np.minimum(iz,voxels[2]-nvoxz))
 
-            x[0] = H[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox] # The 0th element is for 1st (only) layer.
-            self.np_labels = np.zeros(H[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox].shape)
-            indx1 = np.where(Hpl1[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox]!=0)
-            indx2 = np.where(Hpl2[ix:ix+nvox,iy:iy+nvox,iz:iz+nvox]!=0)
-            self.np_labels[indx2] = 2 # Eg1 pixels
+            x[0] = H[ix:ix+nvox,iy:iy+nvox,iz:iz+nvoxz] # The 0th element is for 1st (only) layer.
 
-            self.np_weights = self.np_labels.astype('bool').astype('int')
-            self.np_weights[self.np_weights==0] = 1.0/np.prod(Hpl1.shape)/1000.
-
-
-            return ( x[0], self.np_labels, self.np_weights )
+            return ( x[0], self.np_labels )
+'''
             
 
-        ''' Note that scn.InputLayer() expects 1 input layer not potentially N of them, so collapse x now.'''
-'''
-        return (torch.from_numpy(x.reshape((nvox,nvox,nvox))).float(),
-                torch.from_numpy(self.np_labels).long(),
-                torch.from_numpy(self.np_weights).float())
-'''
-
-
-binned_tdata = BinnedDataset(path='/ccs/home/echurch/pi0',frac_train=0.8,train=True)
-binned_vdata = BinnedDataset(path='/ccs/home/echurch/pi0',frac_train=0.8,train=False)
+binned_tdata = BinnedDataset(path='/ccs/home/echurch/NEXT1Ton',frac_train=0.8,train=True)
+binned_vdata = BinnedDataset(path='/ccs/home/echurch/NEXT1Ton',frac_train=0.8,train=False)
 
 import csv
 with open('history.csv','w') as csvfile:
@@ -344,11 +257,12 @@ with open('history.csv','w') as csvfile:
     history_writer.writeheader()
     thresh = 3
 
-    for epoch in range (15):  # (400)
+    for epoch in range (5):  # (400)
 #        train_gen = gen_waveform(n_iterations_per_epoch=global_n_iterations_per_epoch,mini_batch_size=global_batch_size)
 
+        pdb.set_trace()
         train_gen = DataLoader(dataset=binned_tdata, batch_size=global_batch_size,
-                               shuffle=False, num_workers=1) ## global_batch_size) #global_batch_size)
+                               shuffle=False, num_workers=global_batch_size)
         lr_step.step()
 
         for iteration, minibatch in enumerate(train_gen):
@@ -361,7 +275,7 @@ with open('history.csv','w') as csvfile:
 
             optimizer.zero_grad()
 
-            feats, labels_var, weight_var = minibatch            
+            feats, labels_var = minibatch            
 
             tmp = np.nonzero(feats>thresh)
             # below 4-lines are torch-urous equivalent of numpy moveaxis to get batch indx on far right column.
@@ -381,10 +295,10 @@ with open('history.csv','w') as csvfile:
 
 
             ''' After some diagnostic period let's put this outside the Iteration loop'''
-            train_accuracy = accuracy(yhat, labels_var[indspgen], feats[indspgen])    # None)
+            train_accuracy = accuracy(yhat, labels_var[indspgen])
             net.eval()
 
-            print("Epoch: {}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g},{:.4g},{:.4g}]".format(epoch, iteration,float(train_loss.data), train_accuracy[0], train_accuracy[1], train_accuracy[2]))
+            print("Tain.Epoch: {}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g},{:.4g},{:.4g}]".format(epoch, iteration,float(train_loss.data), train_accuracy))
 
 
         # done with iterations within a training epoch
@@ -406,9 +320,9 @@ with open('history.csv','w') as csvfile:
             
             val_loss = loss(yhat,labels_var[indspgen].type(dtypei) ) #, weight_var[indspgen].type(dtype)) 
             #            val_accuracy = accuracy(y, yhat)
-            val_accuracy = accuracy(yhat, labels_var[indspgen], feats[indspgen])   
+            val_accuracy = accuracy(yhat, labels_var[indspgen])   
 
-            print("Epoch: {}, Iteration: {}, Loss: [{:.4g},{:.4g}], *** Train Accuracy: [{:.4g},{:.4g},{:.4g}, ***,  Val Accuracy: [{:.4g},{:.4g},{:.4g}]".format(epoch, iteration,float(train_loss.data), val_loss, train_accuracy[0], train_accuracy[1], train_accuracy[2], val_accuracy[0], val_accuracy[1], val_accuracy[2]))
+            print("Val.Epoch: {}, Iteration: {}, Loss: [{:.4g},{:.4g}], *** Train Accuracy: [{:.4g},{:.4g},{:.4g}, ***,  Val Accuracy: [{:.4g},{:.4g},{:.4g}]".format(epoch, iteration,float(train_loss.data), val_loss, train_accuracy, val_accuracy))
 
             
             #                if (iteration%1 ==0) and (iteration>0):

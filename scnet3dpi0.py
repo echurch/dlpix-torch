@@ -8,16 +8,21 @@ import numpy as np
 import threading
 import pdb
 
-
+'''
 ###########################################################
 #
-# Sparse Semantic segmentation network used by MicroBooNE
-# to label (sub)dominant Energy gammas from pi0s.
-#
-# implementation from SCN example code (cite)
-#
-#
+# Mid-transition to a NEXT-appropriate scn to classify sig/bkd. 
+# 
+# 
+  (1) Need to read up actual NEXT 1t MC data instaead of LArTPC data
+  (2) BinnedDataSet class below needs to change from labeling, weighing pixels to one that just labels the image, 
+      no weights. Want to keep the histogramming and still pass that out.
+  (3) accuracy() function needs to just return tuple 2-long, 1/0 for sig, bkd
+  (4) whole thing needs to be debugged!
+  
+# EC, 24-Mar-2019.
 ###########################################################
+'''
 
 
 hvd.init()
@@ -38,7 +43,7 @@ dtypei = 'torch.cuda.LongTensor'
 
 global_Nclass = 3 
 global_n_iterations_per_epoch = 20
-global_batch_size = 4 # 32
+global_batch_size = 32
 vox = 2 # int divisor of 250 and 600 and 200. Cubic voxel edge size in cm.
 nvox = int(200/vox) # num bins in each dimension 
 voxels = (int(250/vox),int(600/vox),int(250/vox) ) # These are 2x2x2cm^3 voxels
@@ -157,21 +162,30 @@ import math
 
 
 dimension = 3
-reps = 1 #Conv block repetition factor
-m = 32 #Unet number of features
-nPlanes = [m, 2*m, 3*m, 4*m, 5*m] #UNet number of features per level
-nPlanes = [m, 2*m, 3*m] # My 100x100x100 resolution doesn't allow to go further than this.
+nPlanes = 1
+
+
+'''
+Model below is an example, inspired by 
+https://github.com/facebookresearch/SparseConvNet/blob/master/examples/3d_segmentation/fully_convolutional.py
+Not yet even debugged!
+EC, 24-March-2019
+'''
 
 class Model(nn.Module):
     def __init__(self):
         nn.Module.__init__(self)
         self.sparseModel = scn.Sequential().add(
             scn.InputLayer(dimension, torch.LongTensor([nvox]*3), mode=3)).add(
-           scn.SubmanifoldConvolution(dimension, 1, m, 3, False)).add(
-           scn.UNet(dimension, reps, nPlanes, residual_blocks=False, downsample=[2,2])).add(
-           scn.BatchNormReLU(m)).add(
-           scn.OutputLayer(dimension))
-        self.linear = nn.Linear(m, global_Nclass)
+                scn.SubmanifoldConvolution(dimension, nPlanes, 16, 3, False)).add(
+#                    scn.SparseResNet(dimension, 16, [
+#                        ['b', 16, 2, 1],
+#                        ['b', 32, 2, 2],
+#                        ['b', 48, 2, 2],
+#                        ['b', 96, 2, 2]]                )).add(
+                            scn.BatchNormReLU(16)).add(
+                                scn.OutputLayer(dimension))
+        self.linear = nn.Linear(16, global_Nclass)
     def forward(self,x):
         x=self.sparseModel(x)
         x=self.linear(x)
@@ -209,32 +223,8 @@ def _assert_no_grad(variable):
         "mark these variables as not requiring gradients"
 
 import torch.nn.functional as F    
-class PixelWiseNLLLoss(nn.modules.loss._WeightedLoss):
-    def __init__(self,weight=None, size_average=True, ignore_index=-100 ):  ## size_average=True, 
-        super(PixelWiseNLLLoss,self).__init__(weight,size_average)
-        self.ignore_index = ignore_index
-        self.weight = weight
-        self.reduce = False # "mean" # False
-        self.size_average = size_average
-#        self.reduce = True
 
-        self.mean = torch.mean # torch.mean.cuda() fails with 'has no attribute cuda" ....
-        
-    def forward(self,predict,target,pixelweights):
-        """
-        predict: (b,c,h,w) tensor with output from logsoftmax
-        target:  (b,h,w) tensor with correct class
-        pixelweights: (b,h,w) tensor with weights for each pixel
-        """
-        _assert_no_grad(target)
-        _assert_no_grad(pixelweights)
-        # reduce for below is false, so returns (b,h,w)
-
-        pixelloss = F.nll_loss(predict,target, self.weight,self.size_average, self.ignore_index, self.reduce)
-
-        return self.mean(pixelloss*pixelweights)
-
-loss = PixelWiseNLLLoss().cuda()
+loss = torch.nn.NLLLoss().cuda()
 
 learning_rate = 0.001 # 0.010
 #optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=0.9)
@@ -264,6 +254,7 @@ class BinnedDataset(Dataset):
                 on a sample.
         """
         ftype = "*ana*"
+
         self.files = [ i for i in glob.glob(path+"/"+ftype)]
         dim3 = np.array(( nvox,nvox,nvox))
         self.np_labels  = np.zeros( dim3, dtype=np.int )
@@ -282,15 +273,16 @@ class BinnedDataset(Dataset):
 
         with self.lock:
             x = np.ndarray(shape=( 1, nvox, nvox, nvox))
-
+#            print ("ind_file: " +str(idx)+ " self.files is " + str(self.files))
             ind_file = idx
-            #        print ("ind_file: " +str(ind_file)+ " self.files is " + str(self.files))
             current_file = np.load(self.files[ind_file])
             if self.train:
                 current_index = np.random.randint(int(current_file.shape[0]*self.frac_train), size=1)[0]
             else:
                 current_index = np.random.randint(int(current_file.shape[0]*self.frac_train),int(current_file.shape[0]), size=1)[0]
-                
+
+
+
             data = np.array((current_file[current_index,]['sdX'][current_file[current_index,]['sdTPC']==3],current_file[current_index,]['sdY'][current_file[current_index,]['sdTPC']==3], current_file[current_index,]['sdZ'][current_file[current_index,]['sdTPC']==3] ))
             dataT = data.T
             
@@ -352,11 +344,11 @@ with open('history.csv','w') as csvfile:
     history_writer.writeheader()
     thresh = 3
 
-    for epoch in range (15):  # (400)
+    for epoch in range (150):  # (400)
 #        train_gen = gen_waveform(n_iterations_per_epoch=global_n_iterations_per_epoch,mini_batch_size=global_batch_size)
 
         train_gen = DataLoader(dataset=binned_tdata, batch_size=global_batch_size,
-                               shuffle=False, num_workers=global_batch_size) #global_batch_size)
+                               shuffle=False, num_workers=global_batch_size)
         lr_step.step()
 
         for iteration, minibatch in enumerate(train_gen):
@@ -381,7 +373,7 @@ with open('history.csv','w') as csvfile:
 
             yhat = net([coords,feats[indspgen].type(dtype).unsqueeze(1), global_batch_size])
             
-            train_loss = loss(yhat, labels_var[indspgen].type(dtypei), weight_var[indspgen].type(dtype)) 
+            train_loss = loss(yhat, labels_var[indspgen].type(dtypei)) #, weight_var[indspgen].type(dtype)) 
             train_loss.backward()
 #            optimizer.synchronize()
             optimizer.step()
@@ -395,6 +387,7 @@ with open('history.csv','w') as csvfile:
             print("Epoch: {}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g},{:.4g},{:.4g}]".format(epoch, iteration,float(train_loss.data), train_accuracy[0], train_accuracy[1], train_accuracy[2]))
 
 
+        # done with iterations within a training epoch
         val_gen = DataLoader(dataset=binned_vdata, batch_size=global_batch_size,
                                  shuffle=True, num_workers=global_batch_size)
 
@@ -411,7 +404,7 @@ with open('history.csv','w') as csvfile:
 
             yhat = net([coords,feats[indspgen].type(dtype).unsqueeze(1), global_batch_size])
             
-            val_loss = loss(yhat,labels_var[indspgen].type(dtypei), weight_var[indspgen].type(dtype)) 
+            val_loss = loss(yhat,labels_var[indspgen].type(dtypei) ) #, weight_var[indspgen].type(dtype)) 
             #            val_accuracy = accuracy(y, yhat)
             val_accuracy = accuracy(yhat, labels_var[indspgen], feats[indspgen])   
 
