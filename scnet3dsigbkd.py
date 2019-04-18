@@ -173,11 +173,11 @@ class BinnedDataset(Dataset):
             transform (callable, optional): Optional transform to be applied
                 on a sample.
         """
-        ftype = "*ana*"
+        ftype = "*.h5"
 
         self.files = [ i for i in glob.glob(path+"/"+ftype)]
         dim3 = np.array(( nvox,nvox,nvoxz))
-        self.np_labels  = np.zeros( 2, dtype=np.int )
+        self.np_labels  = np.zeros( dim3, dtype=np.int )
 
         self.frac_train = frac_train
         self.valid_train = 1.0 - self.frac_train
@@ -193,11 +193,11 @@ class BinnedDataset(Dataset):
 
         with self.lock:
             x = np.ndarray(shape=( 1, nvox, nvox, nvoxz))
-            print ("ind_file: " +str(idx)+ " self.files is " + str(self.files))
+            print ("ind_file: " +str(idx)+ " self.files is " + str(self.files[idx]))
 
             ind_file = idx #np.random.randint(int(len(self.files)),size=1)[0]
             current_file = h5py.File(self.files[ind_file])
-            sigbkd = "bb0" in current_file
+            sigbkd = "bb0" in current_file.filename
             self.np_labels = 0
             if (sigbkd):
                 self.np_labels = 1
@@ -210,9 +210,12 @@ class BinnedDataset(Dataset):
             else:
                 current_index = np.random.randint(int(extentset[-1][0]*self.frac_train),int(extentset[-1][0]), size=1)[0]
 
-            hitset = current_file['MC']['hits'][current_index]            
+            current_starthit = int(extentset[current_index - 1]['last_hit'] + 1)
+            current_endhit = int(extentset[current_index]['last_hit'])
 
-            data = np.array(hitset['hitposition'][:,0]+750.,hitset['hitposition'][:,1]+750.,hitset['hitposition'][:,2]+1500.)
+            hitset = current_file['MC']['hits'][current_starthit:current_endhit]            
+
+            data = np.array((hitset['hit_position'][:,0]+750.,hitset['hit_position'][:,1]+750.,hitset['hit_position'][:,2]+1500.))
             dataT = data.T
             
             if dataT.sum() is 0:
@@ -225,9 +228,9 @@ class BinnedDataset(Dataset):
             weights=hitset['hit_energy']
             ##  view,chan,x
 
-            voxels = (int(15000/vox),int(1500/vox),int(3000/voxz) ) # These are 1x1x1cm^3 voxels
+            voxels = (int(1500/vox),int(1500/vox),int(3000/vox) ) # These are 1x1x1cm^3 voxels
             
-            H,edges = np.histogramdd(dataT,bins=voxels,range=((0.,250.),(0.,600.),(0.,250.)),weights=weights)
+            H,edges = np.histogramdd(dataT,bins=voxels,range=((0.,1500.),(0.,1500.),(0.,3000.)),weights=weights)
 # Try to use whole pixelated volume now with scn. EC, 15-Apr-2019.
             return ( H, self.np_labels )
 
@@ -246,8 +249,8 @@ class BinnedDataset(Dataset):
 '''
             
 
-binned_tdata = BinnedDataset(path='/ccs/home/echurch/NEXT1Ton',frac_train=0.8,train=True)
-binned_vdata = BinnedDataset(path='/ccs/home/echurch/NEXT1Ton',frac_train=0.8,train=False)
+binned_tdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton',frac_train=0.8,train=True)
+binned_vdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton',frac_train=0.8,train=False)
 
 import csv
 with open('history.csv','w') as csvfile:
@@ -255,7 +258,7 @@ with open('history.csv','w') as csvfile:
                   'Validation Loss', 'Train Accuracy', 'Validation Accuracy', "Learning Rate"]
     history_writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
     history_writer.writeheader()
-    thresh = 3
+    thresh = 0.003 # deposited energy
 
     for epoch in range (5):  # (400)
 #        train_gen = gen_waveform(n_iterations_per_epoch=global_n_iterations_per_epoch,mini_batch_size=global_batch_size)
@@ -306,7 +309,7 @@ with open('history.csv','w') as csvfile:
                                  shuffle=True, num_workers=global_batch_size)
 
         for iteration, minibatch in enumerate(val_gen):
-            feats, labels_var, weight_var = minibatch            
+            feats, labels_var = minibatch            
 
             tmp = np.nonzero(feats>thresh)
             # below 4-lines are torch-urous equivalent of numpy moveaxis to get batch indx on far right column.
