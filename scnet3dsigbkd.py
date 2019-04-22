@@ -321,7 +321,7 @@ with open('history.csv','w') as csvfile:
             #            for g in optimizer.param_groups:
             #                learning_rate = g['lr']
             output = {'Iteration':iteration, 'Epoch':epoch, 'Train Loss': float(train_loss.data),
-                      'Validation Loss':val_loss, 'Train Accuracy':train_accuracy, 'Validation Accuracy':val_accuracy, "Learning Rate":learning_rate}
+                      'Validation Loss':float(val_loss.data), 'Train Accuracy':train_accuracy, 'Validation Accuracy':val_accuracy, "Learning Rate":learning_rate}
             history_writer.writerow(output)
             break # Just do it once and pop out
 
