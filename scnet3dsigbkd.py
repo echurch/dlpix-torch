@@ -9,22 +9,6 @@ import threading
 import h5py
 import pdb
 
-'''
-###########################################################
-#
-# Mid-transition to a NEXT-appropriate scn to classify sig/bkd. 
-# 
-# 
-  (1) Need to read up actual NEXT 1t MC data instaead of LArTPC data
-  (2) BinnedDataSet class below needs to change from labeling, weighing pixels to one that just labels the image, 
-      no weights. Want to keep the histogramming and still pass that out.
-  (3) accuracy() function needs to just return tuple 2-long, 1/0 for sig, bkd
-  (4) whole thing needs to be debugged!
-  
-# EC, 24-Mar-2019.
-###########################################################
-'''
-
 
 hvd.init()
 seed = 314159
@@ -42,9 +26,10 @@ dtype = 'torch.cuda.FloatTensor'
 dtypei = 'torch.cuda.LongTensor'                                                                     
 
 
-global_Nclass = 3 
+global_Nclass = 2 # signal, bkgd
 global_n_iterations_per_epoch = 20
-global_batch_size = 32
+global_n_epochs = 30
+global_batch_size = 14  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
 nvoxz = int(3000/vox) # num bins in z dimension 
@@ -60,11 +45,12 @@ def accuracy(output, target):
     batch_size = target.size(0)
     _, pred = output.max( 1, keepdim=False) # on gpu
     targetex = target.resize_( pred.size() ) # expanded view, should not include copy
+
     correct = pred.eq( targetex.type(dtypei))  #.to(torch.device("cuda")) ) # on gpu
     #print "correct ",correct.size(), " iscuda=",correct.is_cuda    
 
     # make result vector
-    res = correct.sum()/len(correct)
+    res = float(correct.sum())/float(len(correct))
 
     return res
                                                             
@@ -93,22 +79,26 @@ class Model(nn.Module):
     def __init__(self):
         nn.Module.__init__(self)
         self.sparseModel = scn.Sequential().add(
-            scn.InputLayer(dimension, torch.LongTensor([nvox]*3), mode=3)).add(
-                scn.SubmanifoldConvolution(dimension, nPlanes, 18, 3, False)).add(
-            scn.MaxPooling(2, 3, 2)).add(
-            scn.SparseResNet(2, 8, [
+            scn.InputLayer(dimension, (nvox,nvox,nvoxz), mode=3)).add(
+                scn.SubmanifoldConvolution(dimension, nPlanes, 4, 3, False)).add(
+                    scn.MaxPooling(dimension, 3, 3)).add(
+                    scn.SparseResNet(dimension, 4, [
                         ['b', 8, 2, 1],
-                        ['b', 16, 2, 2],
-                        ['b', 24, 2, 2],
-                        ['b', 32, 2, 2]])).add(
-            scn.Convolution(2, 32, 64, 5, 1, False)).add(
-            scn.BatchNormReLU(64)).add(
-            scn.SparseToDense(2, 64))
+                        ['b', 16, 2, 1],
+                        ['b', 24, 2, 1]])).add(
+#                        ['b', 32, 2, 1]])).add(
+                            scn.Convolution(dimension, 24, 32, 5, 1, False)).add(
+                                scn.BatchNormReLU(32)).add(
+                                    scn.SparseToDense(dimension, 32))
 #        self.spatial_size = self.sparseModel.input_spatial_size(torch.LongTensor([1, 1]))
-        self.linear = nn.Linear(64, global_Nclass)
+        self.linear = nn.Linear(int(32*46*46*96), 32)
+        self.linear2 = nn.Linear(32,global_Nclass)
     def forward(self,x):
         x = self.sparseModel(x)
-        x = self.linear(x)
+        x = x.view(-1, 32*46*46*96)
+        x = nn.functional.elu(self.linear(x))
+        x = self.linear2(x)
+        x = nn.functional.softmax(x, dim=1)
         return x
  
 net = Model()
@@ -177,7 +167,6 @@ class BinnedDataset(Dataset):
 
         self.files = [ i for i in glob.glob(path+"/"+ftype)]
         dim3 = np.array(( nvox,nvox,nvoxz))
-        self.np_labels  = np.zeros( dim3, dtype=np.int )
 
         self.frac_train = frac_train
         self.valid_train = 1.0 - self.frac_train
@@ -210,31 +199,31 @@ class BinnedDataset(Dataset):
             else:
                 current_index = np.random.randint(int(extentset[-1][0]*self.frac_train),int(extentset[-1][0]), size=1)[0]
 
+
             current_starthit = int(extentset[current_index - 1]['last_hit'] + 1)
             current_endhit = int(extentset[current_index]['last_hit'])
 
             hitset = current_file['MC']['hits'][current_starthit:current_endhit]            
 
             data = np.array((hitset['hit_position'][:,0]+750.,hitset['hit_position'][:,1]+750.,hitset['hit_position'][:,2]+1500.))
+            weights=hitset['hit_energy']
             dataT = data.T
             
             if dataT.sum() is 0:
                 print("Problem! Image is empty for current_index " + str(current_index))
                 raise
-            
+
+            '''  Try to use whole pixelated volume now with scn. EC, 15-Apr-2019.            
             xmin = np.argmin(dataT[:,0])
             ymin = np.argmin(dataT[:,1])
             zmin = np.argmin(dataT[:,2])
-            weights=hitset['hit_energy']
             ##  view,chan,x
+            '''
+            ranges = tuple(vox*float(x) for x in voxels)
+#            H,edges = np.histogramdd(dataT,bins=voxels,range=ranges, weights=weights)
+            H,edges = np.histogramdd(dataT,bins=voxels,range=((0.,1500.),(0.,1500.),(0.,3000.)), weights=weights)
 
-            voxels = (int(1500/vox),int(1500/vox),int(3000/vox) ) # These are 1x1x1cm^3 voxels
-            
-            H,edges = np.histogramdd(dataT,bins=voxels,range=((0.,1500.),(0.,1500.),(0.,3000.)),weights=weights)
-# Try to use whole pixelated volume now with scn. EC, 15-Apr-2019.
             return ( H, self.np_labels )
-
-
 
 '''
             (xmax,ymax,zmax) = np.unravel_index(np.argmax(H,axis=None),H.shape)
@@ -260,12 +249,11 @@ with open('history.csv','w') as csvfile:
     history_writer.writeheader()
     thresh = 0.003 # deposited energy
 
-    for epoch in range (5):  # (400)
+    for epoch in range (global_n_epochs):
 #        train_gen = gen_waveform(n_iterations_per_epoch=global_n_iterations_per_epoch,mini_batch_size=global_batch_size)
 
-        pdb.set_trace()
         train_gen = DataLoader(dataset=binned_tdata, batch_size=global_batch_size,
-                               shuffle=False, num_workers=global_batch_size)
+                               shuffle=True, num_workers=global_batch_size)
         lr_step.step()
 
         for iteration, minibatch in enumerate(train_gen):
@@ -289,19 +277,18 @@ with open('history.csv','w') as csvfile:
             indspgen = feats>thresh
 
             yhat = net([coords,feats[indspgen].type(dtype).unsqueeze(1), global_batch_size])
-            
-            train_loss = loss(yhat, labels_var[indspgen].type(dtypei)) #, weight_var[indspgen].type(dtype)) 
+
+            train_loss = loss(yhat, labels_var.type(dtypei)) #, weight_var[indspgen].type(dtype)) 
             train_loss.backward()
 #            optimizer.synchronize()
+            ''' After some diagnostic period let's put this outside the Iteration loop'''
+            train_accuracy = accuracy(yhat, labels_var)
+
             optimizer.step()
 
-
-
-            ''' After some diagnostic period let's put this outside the Iteration loop'''
-            train_accuracy = accuracy(yhat, labels_var[indspgen])
             net.eval()
 
-            print("Tain.Epoch: {}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g},{:.4g},{:.4g}]".format(epoch, iteration,float(train_loss.data), train_accuracy))
+            print("Train.Epoch: {}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g}]".format(epoch, iteration,float(train_loss.data), train_accuracy))
 
 
         # done with iterations within a training epoch
@@ -321,11 +308,12 @@ with open('history.csv','w') as csvfile:
 
             yhat = net([coords,feats[indspgen].type(dtype).unsqueeze(1), global_batch_size])
             
-            val_loss = loss(yhat,labels_var[indspgen].type(dtypei) ) #, weight_var[indspgen].type(dtype)) 
+            val_loss = loss(yhat,labels_var.type(dtypei) ) #, weight_var[indspgen].type(dtype)) 
             #            val_accuracy = accuracy(y, yhat)
-            val_accuracy = accuracy(yhat, labels_var[indspgen])   
+            val_accuracy = accuracy(yhat, labels_var)   
 
-            print("Val.Epoch: {}, Iteration: {}, Loss: [{:.4g},{:.4g}], *** Train Accuracy: [{:.4g},{:.4g},{:.4g}, ***,  Val Accuracy: [{:.4g},{:.4g},{:.4g}]".format(epoch, iteration,float(train_loss.data), val_loss, train_accuracy, val_accuracy))
+
+            print("Val.Epoch: {}, Iteration: {}, Train,Val Loss: [{:.4g},{:.4g}], *** Train,Val Accuracy: [{:.4g},{:.4g}] ***".format(epoch, iteration,float(train_loss.data), val_loss, train_accuracy, val_accuracy ))
 
             
             #                if (iteration%1 ==0) and (iteration>0):
