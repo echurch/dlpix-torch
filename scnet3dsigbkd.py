@@ -166,25 +166,31 @@ class BinnedDataset(Dataset):
         ftype = "*.h5"
 
         self.files = [ i for i in glob.glob(path+"/"+ftype)]
+        self.file_lengths = [ len((h5py.File(fname))['MC']['extents']) for fname in self.files ]
         dim3 = np.array(( nvox,nvox,nvoxz))
 
         self.frac_train = frac_train
-        self.valid_train = 1.0 - self.frac_train
+        self.frac_dataset = self.frac_train if train else (1 - self.frac_train)
         self.train = train
         self.path = path
         self.thresh = thresh
         self.lock = threading.Lock()
 
     def __len__(self):
-        return len(self.files)
+        return int(sum(self.file_lengths)*self.frac_dataset)
 
     def __getitem__(self, idx):
 
         with self.lock:
-            x = np.ndarray(shape=( 1, nvox, nvox, nvoxz))
-            print ("ind_file: " +str(idx)+ " self.files is " + str(self.files[idx]))
+            for ifile in range(len(self.file_lengths)):
+                if idx <= sum(self.file_lengths[0 : ifile + 1])*self.frac_dataset:
+                    ind_file = ifile
+                    ind_evt = idx - int(sum(self.file_lengths[0 : ifile])*self.frac_dataset)
+                    break
 
-            ind_file = idx #np.random.randint(int(len(self.files)),size=1)[0]
+            x = np.ndarray(shape=( 1, nvox, nvox, nvoxz))
+            #print ("ind_file: " +str(ind_file)+ " self.files is " + str(self.files[ind_file]))
+
             current_file = h5py.File(self.files[ind_file])
             sigbkd = "bb0" in current_file.filename
             self.np_labels = 0
@@ -195,9 +201,9 @@ class BinnedDataset(Dataset):
             extentset = current_file['MC']['extents']
 
             if self.train:
-                current_index = np.random.randint(int(extentset[-1][0]*self.frac_train), size=1)[0]
+                current_index = ind_evt
             else:
-                current_index = np.random.randint(int(extentset[-1][0]*self.frac_train),int(extentset[-1][0]), size=1)[0]
+                current_index = ind_evt + int(self.file_lengths[ind_file]*self.frac_train)
 
 
             current_starthit = int(extentset[current_index - 1]['last_hit'] + 1)
@@ -254,6 +260,7 @@ with open('history.csv','w') as csvfile:
 
         train_gen = DataLoader(dataset=binned_tdata, batch_size=global_batch_size,
                                shuffle=True, num_workers=global_batch_size)
+        print('len(train_gen): %s'%len(train_gen))
         lr_step.step()
 
         for iteration, minibatch in enumerate(train_gen):
