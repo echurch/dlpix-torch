@@ -28,10 +28,10 @@ dtypei = 'torch.cuda.LongTensor'
 
 
 global_Nclass = 2 # signal, bkgd
-global_n_iterations_per_epoch = 500
+global_n_iterations_per_epoch = 200
 global_n_iterations_val = 4
 global_n_epochs = 40
-global_batch_size = 24  ## Can be at least 32, but need this many files to pick evts from in DataLoader
+global_batch_size = 14  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
 nvoxz = int(3000/vox) # num bins in z dimension 
@@ -253,8 +253,11 @@ import csv
 with open('history.csv','w') as csvfile:
     fieldnames = ['Training_Validation', 'Iteration', 'Epoch', 'Loss',
                   'Accuracy', "Learning Rate"]
-    history_writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-    history_writer.writeheader()
+
+    # only let one core write to this file.
+    if hvd.rank()==0:
+        history_writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        history_writer.writeheader()
     thresh = 0.003 # deposited energy
 
     train_loss = hu.Metric('train_loss')
@@ -303,11 +306,15 @@ with open('history.csv','w') as csvfile:
             print("Train.Rank,Epoch: {},{}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g}]".format(hvd.rank(), epoch, iteration,float(train_loss.avg), train_accuracy.avg))
 
             output = {'Training_Validation':'Training', 'Iteration':iteration, 'Epoch':epoch, 'Loss': float(train_loss.avg),
-                      'Accuracy':train_accuracy.avg, "Learning Rate":learning_rate}
-            history_writer.writerow(output)
+                      'Accuracy':train_accuracy.avg.data, "Learning Rate":learning_rate}
+            if hvd.rank()==0:
+                history_writer.writerow(output)
+            csvfile.flush()
+
             # below is to keep this from exceeding 4 hrs
             if iteration > global_n_iterations_per_epoch:
                 break
+
 
 
         # done with iterations within a training epoch
@@ -340,7 +347,8 @@ with open('history.csv','w') as csvfile:
             #                learning_rate = g['lr']
             output = {'Training_Validation':'Validation','Iteration':iteration, 'Epoch':epoch, 
                       'Loss':float(val_loss.avg), 'Accuracy':val_accuracy.avg, "Learning Rate":learning_rate}
-            history_writer.writerow(output)
+            if hvd.rank()==0:
+                history_writer.writerow(output)
             if iteration>=global_n_iterations_val:
                 break # Just check val for 4 iterations and pop out
 
