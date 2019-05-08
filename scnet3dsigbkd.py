@@ -29,7 +29,7 @@ dtypei = 'torch.cuda.LongTensor'
 global_Nclass = 2 # signal, bkgd
 global_n_iterations_per_epoch = 20
 global_n_epochs = 30
-global_batch_size = 14  ## Can be at least 32, but need this many files to pick evts from in DataLoader
+global_batch_size = 24  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
 nvoxz = int(3000/vox) # num bins in z dimension 
@@ -165,7 +165,11 @@ class BinnedDataset(Dataset):
         """
         ftype = "*.h5"
 
-        self.files = [ i for i in glob.glob(path+"/"+ftype)]
+        self.files = []
+        for pth in path:
+            #self.files.extend(glob.glob(pth+"/"+ftype))
+            self.files.extend(glob.glob(pth+ftype))
+        print(self.files)
         self.file_lengths = [ len((h5py.File(fname))['MC']['extents']) for fname in self.files ]
         dim3 = np.array(( nvox,nvox,nvoxz))
 
@@ -244,8 +248,10 @@ class BinnedDataset(Dataset):
 '''
             
 
-binned_tdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton',frac_train=0.8,train=True)
-binned_vdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton',frac_train=0.8,train=False)
+#binned_tdata = BinnedDataset(path=[os.environ['HOME']+'/NEXT1Ton',os.environ['HOME']+'/NEXT1Ton/Bi214'],frac_train=0.8,train=True)
+#binned_vdata = BinnedDataset(path=[os.environ['HOME']+'/NEXT1Ton',os.environ['HOME']+'/NEXT1Ton/Bi214'],frac_train=0.8,train=False)
+binned_tdata = BinnedDataset(path=[os.environ['HOME']+'/NEXT1Ton/bb0nu-0000-ACTIVE',os.environ['HOME']+'/NEXT1Ton/Bi214/Bi214-0000-INNER_SHIELDING'],frac_train=0.8,train=True)
+binned_vdata = BinnedDataset(path=[os.environ['HOME']+'/NEXT1Ton/bb0nu-0000-ACTIVE',os.environ['HOME']+'/NEXT1Ton/Bi214/Bi214-0000-INNER_SHIELDING'],frac_train=0.8,train=False)
 
 import csv
 with open('history.csv','w') as csvfile:
@@ -264,7 +270,6 @@ with open('history.csv','w') as csvfile:
         lr_step.step()
 
         for iteration, minibatch in enumerate(train_gen):
-
             net.train()
 #            torch.distributed.init_process_group(backend='nccl',
 #                                                 init_method='env://',
