@@ -28,9 +28,9 @@ dtypei = 'torch.cuda.LongTensor'
 
 
 global_Nclass = 2 # signal, bkgd
-global_n_iterations_per_epoch = 200
+global_n_iterations_per_epoch = 20
 global_n_iterations_val = 4
-global_n_epochs = 40
+global_n_epochs = 4
 global_batch_size = 14  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
@@ -250,22 +250,26 @@ binned_tdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton',frac_train=0.8,
 binned_vdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton',frac_train=0.8,train=False)
 
 import csv
-with open('history.csv','w') as csvfile:
-    fieldnames = ['Training_Validation', 'Iteration', 'Epoch', 'Loss',
-                  'Accuracy', "Learning Rate"]
+if hvd.rank()==0:
+    csvfile = open('history.csv','w')
+#with open('history.csv','w') as csvfile:
 
-    # only let one core write to this file.
-    if hvd.rank()==0:
-        history_writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        history_writer.writeheader()
-    thresh = 0.003 # deposited energy
 
-    train_loss = hu.Metric('train_loss')
-    train_accuracy = hu.Metric('train_accuracy')
-    val_loss = hu.Metric('val_loss')
-    val_accuracy = hu.Metric('val_accuracy')
+fieldnames = ['Training_Validation', 'Iteration', 'Epoch', 'Loss',
+              'Accuracy', "Learning Rate"]
 
-    for epoch in range (global_n_epochs):
+# only let one core write to this file.
+if hvd.rank()==0:
+    history_writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    history_writer.writeheader()
+thresh = 0.003 # deposited energy
+
+train_loss = hu.Metric('train_loss')
+train_accuracy = hu.Metric('train_accuracy')
+val_loss = hu.Metric('val_loss')
+val_accuracy = hu.Metric('val_accuracy')
+
+for epoch in range (global_n_epochs):
 
         train_gen = DataLoader(dataset=binned_tdata, batch_size=global_batch_size,
                                shuffle=True, num_workers=global_batch_size)
@@ -309,7 +313,7 @@ with open('history.csv','w') as csvfile:
                       'Accuracy':train_accuracy.avg.data, "Learning Rate":learning_rate}
             if hvd.rank()==0:
                 history_writer.writerow(output)
-            csvfile.flush()
+                csvfile.flush()
 
             # below is to keep this from exceeding 4 hrs
             if iteration > global_n_iterations_per_epoch:
@@ -352,16 +356,17 @@ with open('history.csv','w') as csvfile:
             if iteration>=global_n_iterations_val:
                 break # Just check val for 4 iterations and pop out
 
-        csvfile.flush()
+        if hvd.rank()==0:        
+            csvfile.flush()
 
-        hostname = "hidden"
-        try:
-            hostname = os.environ["HOSTNAME"]
-        except:
-            pass
-        print("host: hvd.rank()/hvd.local_rank() are: " + str(hostname) + ": " + str(hvd.rank())+"/"+str(hvd.local_rank()) ) 
+hostname = "hidden"
+try:
+    hostname = os.environ["HOSTNAME"]
+except:
+    pass
+print("host: hvd.rank()/hvd.local_rank() are: " + str(hostname) + ": " + str(hvd.rank())+"/"+str(hvd.local_rank()) ) 
 
 
-    print("end of epoch")
-    torch.save(net.state_dict(), 'model-scn3dsigbkd.pkl')
+print("end of epoch")
+torch.save(net.state_dict(), 'model-scn3dsigbkd.pkl')
 

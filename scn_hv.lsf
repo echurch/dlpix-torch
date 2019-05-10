@@ -1,13 +1,13 @@
-#BSUB -P HEP112
+#BSUB -P nph133
 #BSUB -J scn3d
 #BSUB -o scn3d%J.o
-#BSUB -W 240
+#BSUB -W 120
 #BSUB -nnodes 1
 
 cd /ccs/home/echurch/dlpix-torch
 module -q restore system
 
-source /ccs/proj/hep112/activate_rockyroad_hv.sh
+source /ccs/proj/nph133/activate_next0.sh
 module list
 
 date
