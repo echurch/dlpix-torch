@@ -28,9 +28,9 @@ dtypei = 'torch.cuda.LongTensor'
 
 
 global_Nclass = 2 # signal, bkgd
-global_n_iterations_per_epoch = 20
+global_n_iterations_per_epoch = 100
 global_n_iterations_val = 4
-global_n_epochs = 4
+global_n_epochs = 40
 global_batch_size = 14  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
@@ -251,7 +251,8 @@ binned_vdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton',frac_train=0.8,
 
 import csv
 if hvd.rank()==0:
-    csvfile = open('history.csv','w')
+    filename = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/'+'history.csv'
+    csvfile = open(filename,'w')
 #with open('history.csv','w') as csvfile:
 
 
