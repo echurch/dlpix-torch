@@ -7,6 +7,7 @@ import os, glob
 import numpy as np
 import threading
 import h5py
+import hvd_util as hu
 import pdb
 
 
@@ -27,9 +28,10 @@ dtypei = 'torch.cuda.LongTensor'
 
 
 global_Nclass = 2 # signal, bkgd
-global_n_iterations_per_epoch = 20
-global_n_epochs = 30
-global_batch_size = 24  ## Can be at least 32, but need this many files to pick evts from in DataLoader
+global_n_iterations_per_epoch = 200
+global_n_iterations_val = 4
+global_n_epochs = 40
+global_batch_size = 14  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
 nvoxz = int(3000/vox) # num bins in z dimension 
@@ -255,14 +257,21 @@ binned_vdata = BinnedDataset(path=[os.environ['HOME']+'/NEXT1Ton/bb0nu-0000-ACTI
 
 import csv
 with open('history.csv','w') as csvfile:
-    fieldnames = ['Iteration', 'Epoch', 'Train Loss',
-                  'Validation Loss', 'Train Accuracy', 'Validation Accuracy', "Learning Rate"]
-    history_writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-    history_writer.writeheader()
+    fieldnames = ['Training_Validation', 'Iteration', 'Epoch', 'Loss',
+                  'Accuracy', "Learning Rate"]
+
+    # only let one core write to this file.
+    if hvd.rank()==0:
+        history_writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        history_writer.writeheader()
     thresh = 0.003 # deposited energy
 
+    train_loss = hu.Metric('train_loss')
+    train_accuracy = hu.Metric('train_accuracy')
+    val_loss = hu.Metric('val_loss')
+    val_accuracy = hu.Metric('val_accuracy')
+
     for epoch in range (global_n_epochs):
-#        train_gen = gen_waveform(n_iterations_per_epoch=global_n_iterations_per_epoch,mini_batch_size=global_batch_size)
 
         train_gen = DataLoader(dataset=binned_tdata, batch_size=global_batch_size,
                                shuffle=True, num_workers=global_batch_size)
@@ -271,11 +280,6 @@ with open('history.csv','w') as csvfile:
 
         for iteration, minibatch in enumerate(train_gen):
             net.train()
-#            torch.distributed.init_process_group(backend='nccl',
-#                                                 init_method='env://',
-#                                                 world_size=4,
-#                                                 rank = hvd.rank())
-
             optimizer.zero_grad()
 
             feats, labels_var = minibatch            
@@ -290,17 +294,32 @@ with open('history.csv','w') as csvfile:
 
             yhat = net([coords,feats[indspgen].type(dtype).unsqueeze(1), global_batch_size])
 
-            train_loss = loss(yhat, labels_var.type(dtypei)) #, weight_var[indspgen].type(dtype)) 
-            train_loss.backward()
+#            train_loss = loss(yhat, labels_var.type(dtypei)) #, weight_var[indspgen].type(dtype)) 
+#            train_accuracy = accuracy(yhat, labels_var)
+            acc = hu.accuracy(yhat, labels_var.cuda())
+            train_accuracy.update(acc)
+            loss = nn.functional.cross_entropy(yhat, labels_var.cuda())
+            train_loss.update(loss)
+
+            loss.backward()
 #            optimizer.synchronize()
-            ''' After some diagnostic period let's put this outside the Iteration loop'''
-            train_accuracy = accuracy(yhat, labels_var)
 
             optimizer.step()
 
             net.eval()
 
-            print("Train.Epoch: {}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g}]".format(epoch, iteration,float(train_loss.data), train_accuracy))
+            print("Train.Rank,Epoch: {},{}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g}]".format(hvd.rank(), epoch, iteration,float(train_loss.avg), train_accuracy.avg))
+
+            output = {'Training_Validation':'Training', 'Iteration':iteration, 'Epoch':epoch, 'Loss': float(train_loss.avg),
+                      'Accuracy':train_accuracy.avg.data, "Learning Rate":learning_rate}
+            if hvd.rank()==0:
+                history_writer.writerow(output)
+            csvfile.flush()
+
+            # below is to keep this from exceeding 4 hrs
+            if iteration > global_n_iterations_per_epoch:
+                break
+
 
 
         # done with iterations within a training epoch
@@ -320,22 +339,23 @@ with open('history.csv','w') as csvfile:
 
             yhat = net([coords,feats[indspgen].type(dtype).unsqueeze(1), global_batch_size])
             
-            val_loss = loss(yhat,labels_var.type(dtypei) ) #, weight_var[indspgen].type(dtype)) 
             #            val_accuracy = accuracy(y, yhat)
-            val_accuracy = accuracy(yhat, labels_var)   
+            acc = hu.accuracy(yhat, labels_var.cuda())   
+            val_accuracy.update(acc)
+            loss = nn.functional.cross_entropy(yhat, labels_var.cuda())
+            val_loss.update(loss)
 
-
-            print("Val.Epoch: {}, Iteration: {}, Train,Val Loss: [{:.4g},{:.4g}], *** Train,Val Accuracy: [{:.4g},{:.4g}] ***".format(epoch, iteration,float(train_loss.data), val_loss, train_accuracy, val_accuracy ))
+            print("Val.Epoch: {}, Iteration: {}, Train,Val Loss: [{:.4g},{:.4g}], *** Train,Val Accuracy: [{:.4g},{:.4g}] ***".format(epoch, iteration,float(train_loss.avg), val_loss.avg, train_accuracy.avg, val_accuracy.avg ))
 
             
-            #                if (iteration%1 ==0) and (iteration>0):
-                
             #            for g in optimizer.param_groups:
             #                learning_rate = g['lr']
-            output = {'Iteration':iteration, 'Epoch':epoch, 'Train Loss': float(train_loss.data),
-                      'Validation Loss':float(val_loss.data), 'Train Accuracy':train_accuracy, 'Validation Accuracy':val_accuracy, "Learning Rate":learning_rate}
-            history_writer.writerow(output)
-            break # Just do it once and pop out
+            output = {'Training_Validation':'Validation','Iteration':iteration, 'Epoch':epoch, 
+                      'Loss':float(val_loss.avg), 'Accuracy':val_accuracy.avg, "Learning Rate":learning_rate}
+            if hvd.rank()==0:
+                history_writer.writerow(output)
+            if iteration>=global_n_iterations_val:
+                break # Just check val for 4 iterations and pop out
 
         csvfile.flush()
 
