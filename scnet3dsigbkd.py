@@ -27,7 +27,7 @@ dtype = 'torch.cuda.FloatTensor'
 dtypei = 'torch.cuda.LongTensor'                                                                     
 
 
-global_Nclass = 2 # signal, bkgd
+global_Nclass = 3 # signal, bkgd
 global_n_iterations_per_epoch = 100
 global_n_iterations_val = 4
 global_n_epochs = 40
@@ -172,7 +172,7 @@ class BinnedDataset(Dataset):
             #self.files.extend(glob.glob(pth+"/"+ftype))
             self.files.extend(glob.glob(pth+ftype))
         print(self.files)
-        self.file_lengths = [ len((h5py.File(fname))['MC']['extents']) for fname in self.files ]
+        self.file_lengths = [ len((h5py.File(fname,'r'))['MC']['extents']) for fname in self.files ]
         dim3 = np.array(( nvox,nvox,nvoxz))
 
         self.frac_train = frac_train
@@ -197,11 +197,14 @@ class BinnedDataset(Dataset):
             x = np.ndarray(shape=( 1, nvox, nvox, nvoxz))
             #print ("ind_file: " +str(ind_file)+ " self.files is " + str(self.files[ind_file]))
 
-            current_file = h5py.File(self.files[ind_file])
+            current_file = h5py.File(self.files[ind_file],'r')
             sigbkd = "bb0" in current_file.filename
+            bkd2nu = "bb2" in current_file.filename
             self.np_labels = 0
             if (sigbkd):
                 self.np_labels = 1
+            if (bkd2nu):
+                self.np_labels = 2
 
 
             extentset = current_file['MC']['extents']
@@ -301,7 +304,7 @@ for epoch in range (global_n_epochs):
 
 #            train_loss = loss(yhat, labels_var.type(dtypei)) #, weight_var[indspgen].type(dtype)) 
 #            train_accuracy = accuracy(yhat, labels_var)
-            acc = hu.accuracy(yhat, labels_var.cuda())
+            acc = hu.accuracy(yhat, labels_var.cuda(), weighted=True, nclass=global_Nclass)
             train_accuracy.update(acc)
             loss = nn.functional.cross_entropy(yhat, labels_var.cuda())
             train_loss.update(loss)
