@@ -27,11 +27,11 @@ dtype = 'torch.cuda.FloatTensor'
 dtypei = 'torch.cuda.LongTensor'                                                                     
 
 
-global_Nclass = 3 # signal, bkgd
+global_Nclass = 3 # bkgd, 0vbb, 2vbb
 global_n_iterations_per_epoch = 100
 global_n_iterations_val = 4
 global_n_epochs = 40
-global_batch_size = 14  ## Can be at least 32, but need this many files to pick evts from in DataLoader
+global_batch_size = 48  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
 nvoxz = int(3000/vox) # num bins in z dimension 
@@ -165,13 +165,10 @@ class BinnedDataset(Dataset):
             transform (callable, optional): Optional transform to be applied
                 on a sample.
         """
-        ftype = "*.h5"
+        ftype = "*/*.h5"
 
-        self.files = []
-        for pth in path:
-            #self.files.extend(glob.glob(pth+"/"+ftype))
-            self.files.extend(glob.glob(pth+ftype))
-        print(self.files)
+        self.files = glob.glob(path+"/"+ftype)
+        print('Found %s files.'%len(self.files))
         self.file_lengths = [ len((h5py.File(fname,'r'))['MC']['extents']) for fname in self.files ]
         dim3 = np.array(( nvox,nvox,nvoxz))
 
@@ -183,15 +180,15 @@ class BinnedDataset(Dataset):
         self.lock = threading.Lock()
 
     def __len__(self):
-        return int(sum(self.file_lengths)*self.frac_dataset)
+        return sum([ int(self.frac_dataset*flength) for flength in self.file_lengths ])
 
     def __getitem__(self, idx):
 
         with self.lock:
             for ifile in range(len(self.file_lengths)):
-                if idx <= sum(self.file_lengths[0 : ifile + 1])*self.frac_dataset:
+                if idx < sum([ int(self.frac_dataset*flength) for flength in self.file_lengths[0 : ifile + 1] ]):
                     ind_file = ifile
-                    ind_evt = idx - int(sum(self.file_lengths[0 : ifile])*self.frac_dataset)
+                    ind_evt = idx - sum([ int(self.frac_dataset*flength) for flength in self.file_lengths[0 : ifile] ])
                     break
 
             x = np.ndarray(shape=( 1, nvox, nvox, nvoxz))
@@ -214,9 +211,16 @@ class BinnedDataset(Dataset):
             else:
                 current_index = ind_evt + int(self.file_lengths[ind_file]*self.frac_train)
 
+            if current_index != 0:
+                current_starthit = int(extentset[current_index - 1]['last_hit'] + 1)
+            else:
+                current_starthit = 0
 
-            current_starthit = int(extentset[current_index - 1]['last_hit'] + 1)
             current_endhit = int(extentset[current_index]['last_hit'])
+            if current_starthit >= current_endhit:
+                print('current start >= current end!!!')
+                print('file: %s'%self.files[ind_file])
+                print('evtidx: %s'%current_index)
 
             hitset = current_file['MC']['hits'][current_starthit:current_endhit]            
 
@@ -255,8 +259,8 @@ class BinnedDataset(Dataset):
 
 #binned_tdata = BinnedDataset(path=[os.environ['HOME']+'/NEXT1Ton',os.environ['HOME']+'/NEXT1Ton/Bi214'],frac_train=0.8,train=True)
 #binned_vdata = BinnedDataset(path=[os.environ['HOME']+'/NEXT1Ton',os.environ['HOME']+'/NEXT1Ton/Bi214'],frac_train=0.8,train=False)
-binned_tdata = BinnedDataset(path=[os.environ['HOME']+'/NEXT1Ton/bb0nu-0000-ACTIVE',os.environ['HOME']+'/NEXT1Ton/Bi214/Bi214-0000-INNER_SHIELDING'],frac_train=0.8,train=True)
-binned_vdata = BinnedDataset(path=[os.environ['HOME']+'/NEXT1Ton/bb0nu-0000-ACTIVE',os.environ['HOME']+'/NEXT1Ton/Bi214/Bi214-0000-INNER_SHIELDING'],frac_train=0.8,train=False)
+binned_tdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton',frac_train=0.8,train=True)
+binned_vdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton',frac_train=0.8,train=False)
 
 import csv
 if hvd.rank()==0:

@@ -2,9 +2,9 @@
 #BSUB -J scn3d
 #BSUB -o scn3d%J.o
 #BSUB -W 120
-#BSUB -nnodes 3
+#BSUB -nnodes 2
 
-cd /ccs/home/echurch/dlpix-torch
+cd /ccs/home/kwoodruff/dlpix-torch
 module -q restore system
 
 source /ccs/proj/nph133/activate_next0.sh
@@ -22,7 +22,8 @@ export HOROVOD_HIERARCHICAL_ALLREDUCE=1
 #export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 # note to run on 4 GPUs per node use jsrun -n arg, with arg=4*nnodes, with nnodes from above BSUB flag.
-jsrun -n 12 -a 1 -c 1 -g 1   python -m  scnet3dsigbkd.py  --summitdev --parallel --bind=none
+jsrun -n 12 -a 1 -c 1 -g 1   python -m  scnet3dsigbkd.py --parallel --bind=none
+#jsrun -n 8 -a 1 -c 1 -g 1   python -m  scnet3dsigbkd.py  --summit --parallel --bind=none
 
 
 ### that there are 54 summitdev nodes
