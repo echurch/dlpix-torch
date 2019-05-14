@@ -31,7 +31,7 @@ global_Nclass = 3 # bkgd, 0vbb, 2vbb
 global_n_iterations_per_epoch = 100
 global_n_iterations_val = 4
 global_n_epochs = 40
-global_batch_size = 48  ## Can be at least 32, but need this many files to pick evts from in DataLoader
+global_batch_size = 4  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
 nvoxz = int(3000/vox) # num bins in z dimension 
@@ -165,9 +165,12 @@ class BinnedDataset(Dataset):
             transform (callable, optional): Optional transform to be applied
                 on a sample.
         """
-        ftype = "*/*.h5"
+        #ftype = [ "bb0nu/*.h5","bb2nu/*.h5","Bi214/*.h5","Tl208/*-OUT_PLANES.h5","Tl208/*-VESSEL.h5" ]
+        ftype = [ "bb0nu/*.h5","bb2nu/*.h5" ]
 
-        self.files = glob.glob(path+"/"+ftype)
+        self.files = []
+        for ft in ftype:
+            self.files.extend( glob.glob(path+"/"+ft) )
         print('Found %s files.'%len(self.files))
         self.file_lengths = [ len((h5py.File(fname,'r'))['MC']['extents']) for fname in self.files ]
         dim3 = np.array(( nvox,nvox,nvoxz))
