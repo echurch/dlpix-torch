@@ -72,7 +72,7 @@ nPlanes = 1
 '''
 Model below is an example, inspired by 
 https://github.com/facebookresearch/SparseConvNet/blob/master/examples/3d_segmentation/fully_convolutional.py
-Not yet even debugged!
+Stripped down to stay within memory limits.
 EC, 24-March-2019
 '''
 
