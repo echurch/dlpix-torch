@@ -44,7 +44,6 @@ def save_checkpoint(model, optimizer, epoch, path):
 def accuracy(output, target, weighted=True, nclass=3):
     # get the index of the max log-probability
     pred = output.max(1, keepdim=True)[1]
-    '''
     if(weighted):
         w_acc = 0.
         nnonzero = 0
@@ -56,8 +55,6 @@ def accuracy(output, target, weighted=True, nclass=3):
         return w_acc/float(nnonzero)
     else:
         return pred.eq(target.view_as(pred)).cpu().float().mean()
-    '''
-    return pred.eq(target.view_as(pred)).cpu().float().mean()
 
 
 def log_batch(rank, epoch, batch_idx, data_size, local_loss, global_loss,

@@ -28,9 +28,9 @@ dtypei = 'torch.cuda.LongTensor'
 
 
 global_Nclass = 3 # bkgd, 0vbb, 2vbb
-global_n_iterations_per_epoch = 10
+global_n_iterations_per_epoch = 1900
 global_n_iterations_val = 4
-global_n_epochs = 10
+global_n_epochs = 100
 global_batch_size = 192  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
@@ -117,7 +117,7 @@ hvd.broadcast_parameters(net.state_dict(), root_rank=0)
 
 try:
     print ("Reading weights from file")
-    net.load_state_dict(torch.load('./model-scn3dsigbkd.pkl'))
+    net.load_state_dict(torch.load('./model-scn3dsigbkd-diffusion.pkl'))
     net.eval()
     print("Succeeded.")
 except:
@@ -164,8 +164,8 @@ class BinnedDataset(Dataset):
             transform (callable, optional): Optional transform to be applied
                 on a sample.
         """
-        ftype = [ "Bi214*.h5","bb2nu*.h5" ]
-        #ftype = [ "bb2nu*.h5" ]
+        #ftype = [ "Bi214*.h5","bb2nu*.h5" ]
+        ftype = [ "*_diffusion.h5" ]
 
         self.files = []
         for ft in ftype:
@@ -204,26 +204,28 @@ class BinnedDataset(Dataset):
             if (bkd2nu):
                 self.np_labels = 2
 
-            weights = current_file['weights'][str(ind_evt)][:]
-            coords = current_file['coords'][str(ind_evt)][:]
+            weights = np.array([current_file['weights'][str(ind_evt)][iwt] for iwt in range(len(current_file['weights'][str(ind_evt)]))])
+            coords = np.array([current_file['coords'][str(ind_evt)][iwt] for iwt in range(len(current_file['coords'][str(ind_evt)]))])
+            #weights = current_file['weights'][str(ind_evt)][:]
+            #coords = current_file['coords'][str(ind_evt)][:]
             H = (coords, weights)
 
             return (H, self.np_labels)
 
 
 def SparseCollate(batch):
-    data0 = torch.cat([torch.from_numpy(np.column_stack((item[0][0].T, np.ones(len(item[0][0].T))*b))) for b,item in enumerate(batch)], dim=0)
-    data1 = torch.cat([torch.from_numpy(item[0][1]) for item in batch], dim=0)
+    #data0 = torch.cat([torch.from_numpy(np.column_stack((item[0][0].T, np.ones(len(item[0][0].T))*b))) for b,item in enumerate(batch)], dim=0)
+    data0 = np.concatenate([np.column_stack((item[0][0].T, np.ones(len(item[0][0].T))*b)) for b,item in enumerate(batch)])
+    data1 = np.concatenate([item[0][1] for item in batch])
     target = [item[1] for item in batch]
-    target = torch.LongTensor(target)
-    return [[data0, data1], target]            
+    return [[data0, data1], target]
 
 binned_tdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton/preprocess',frac_train=0.8,train=True)
 binned_vdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton/preprocess',frac_train=0.8,train=False)
 
 import csv
 if hvd.rank()==0:
-    filename = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/'+'history-tmp.csv'
+    filename = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/'+'history-diffusion.csv'
     csvfile = open(filename,'w')
 
 
@@ -242,81 +244,83 @@ val_accuracy = hu.Metric('val_accuracy')
 
 for epoch in range (global_n_epochs):
 
-        train_gen = DataLoader(dataset=binned_tdata, batch_size=global_batch_size,
-                               shuffle=True, num_workers=global_batch_size,
-                               collate_fn=SparseCollate )
-        print('len(train_gen): %s'%len(train_gen))
-        lr_step.step()
+    train_gen = DataLoader(dataset=binned_tdata, batch_size=global_batch_size,
+                           shuffle=True, num_workers=0,
+                           collate_fn=SparseCollate )
+    print('len(train_gen): %s'%len(train_gen))
+    lr_step.step()
+    for param_group in optimizer.param_groups:
+        print('learning rate: %s'%param_group['lr'])
 
-        for iteration, minibatch in enumerate(train_gen):
-            net.train()
-            optimizer.zero_grad()
+    for iteration, minibatch in enumerate(train_gen):
+        net.train()
+        optimizer.zero_grad()
 
-            feats, labels_var = minibatch
+        feats, labels_var = minibatch
+        labels_var = torch.LongTensor(labels_var)
 
-            coords, weights = feats
+        coords, weights = feats
 
-            yhat = net([coords,weights.type(dtype).unsqueeze(1), global_batch_size])
+        yhat = net([torch.from_numpy(coords),torch.from_numpy(weights).type(dtype).unsqueeze(1), global_batch_size])
 
-            acc = hu.accuracy(yhat, labels_var.cuda(), weighted=True, nclass=global_Nclass)
-            train_accuracy.update(acc)
-            loss = nn.functional.cross_entropy(yhat, labels_var.cuda())
-            train_loss.update(loss)
+        acc = hu.accuracy(yhat, labels_var.cuda(), weighted=True, nclass=global_Nclass)
+        train_accuracy.update(acc)
+        loss = nn.functional.cross_entropy(yhat, labels_var.cuda())
+        train_loss.update(loss)
 
-            loss.backward()
+        loss.backward()
 
-            optimizer.step()
+        optimizer.step()
 
-            net.eval()
+        net.eval()
 
-            print("Train.Rank,Epoch: {},{}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g}]".format(hvd.rank(), epoch, iteration,float(train_loss.avg), train_accuracy.avg))
+        print("Train.Rank,Epoch: {},{}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g}]".format(hvd.rank(), epoch, iteration,float(train_loss.avg), train_accuracy.avg))
 
-            output = {'Training_Validation':'Training', 'Iteration':iteration, 'Epoch':epoch, 'Loss': float(train_loss.avg),
-                      'Accuracy':train_accuracy.avg.data, "Learning Rate":learning_rate}
-            if hvd.rank()==0:
-                history_writer.writerow(output)
-                csvfile.flush()
-
-            # below is to keep this from exceeding 4 hrs
-            if iteration > global_n_iterations_per_epoch:
-                break
-
-
-
-        # done with iterations within a training epoch
-        val_gen = DataLoader(dataset=binned_vdata, batch_size=global_batch_size,
-                                 shuffle=True, num_workers=global_batch_size,
-                                 collate_fn=SparseCollate)
-
-        for iteration, minibatch in enumerate(val_gen):
-            feats, labels_var = minibatch            
-
-            feats, labels_var = minibatch
-
-            coords, weights = feats
-
-            yhat = net([coords,weights.type(dtype).unsqueeze(1), global_batch_size])
-            
-            #            val_accuracy = accuracy(y, yhat)
-            acc = hu.accuracy(yhat, labels_var.cuda())   
-            val_accuracy.update(acc)
-            loss = nn.functional.cross_entropy(yhat, labels_var.cuda())
-            val_loss.update(loss)
-
-            print("Val.Epoch: {}, Iteration: {}, Train,Val Loss: [{:.4g},{:.4g}], *** Train,Val Accuracy: [{:.4g},{:.4g}] ***".format(epoch, iteration,float(train_loss.avg), val_loss.avg, train_accuracy.avg, val_accuracy.avg ))
-
-            
-            #            for g in optimizer.param_groups:
-            #                learning_rate = g['lr']
-            output = {'Training_Validation':'Validation','Iteration':iteration, 'Epoch':epoch, 
-                      'Loss':float(val_loss.avg), 'Accuracy':val_accuracy.avg, "Learning Rate":learning_rate}
-            if hvd.rank()==0:
-                history_writer.writerow(output)
-            if iteration>=global_n_iterations_val:
-                break # Just check val for 4 iterations and pop out
-
-        if hvd.rank()==0:        
+        output = {'Training_Validation':'Training', 'Iteration':iteration, 'Epoch':epoch, 'Loss': float(train_loss.avg),
+                  'Accuracy':train_accuracy.avg.data, "Learning Rate":learning_rate}
+        if hvd.rank()==0:
+            history_writer.writerow(output)
             csvfile.flush()
+
+        # below is to keep this from exceeding 4 hrs
+        if iteration > global_n_iterations_per_epoch:
+            break
+
+
+
+    # done with iterations within a training epoch
+    val_gen = DataLoader(dataset=binned_vdata, batch_size=global_batch_size,
+                             shuffle=True, num_workers=0,
+                             collate_fn=SparseCollate)
+
+    for iteration, minibatch in enumerate(val_gen):
+        feats, labels_var = minibatch            
+        labels_var = torch.LongTensor(labels_var)
+
+        coords, weights = feats
+
+        yhat = net([torch.from_numpy(coords),torch.from_numpy(weights).type(dtype).unsqueeze(1), global_batch_size])
+        
+        #            val_accuracy = accuracy(y, yhat)
+        acc = hu.accuracy(yhat, labels_var.cuda())   
+        val_accuracy.update(acc)
+        loss = nn.functional.cross_entropy(yhat, labels_var.cuda())
+        val_loss.update(loss)
+
+        print("Val.Epoch: {}, Iteration: {}, Train,Val Loss: [{:.4g},{:.4g}], *** Train,Val Accuracy: [{:.4g},{:.4g}] ***".format(epoch, iteration,float(train_loss.avg), val_loss.avg, train_accuracy.avg, val_accuracy.avg ))
+
+        
+        #            for g in optimizer.param_groups:
+        #                learning_rate = g['lr']
+        output = {'Training_Validation':'Validation','Iteration':iteration, 'Epoch':epoch, 
+                  'Loss':float(val_loss.avg), 'Accuracy':val_accuracy.avg, "Learning Rate":learning_rate}
+        if hvd.rank()==0:
+            history_writer.writerow(output)
+        if iteration>=global_n_iterations_val:
+            break # Just check val for 4 iterations and pop out
+
+    if hvd.rank()==0:        
+        csvfile.flush()
 
 hostname = "hidden"
 try:
@@ -327,5 +331,5 @@ print("host: hvd.rank()/hvd.local_rank() are: " + str(hostname) + ": " + str(hvd
 
 
 print("end of epoch")
-torch.save(net.state_dict(), 'model-scn3dsigbkd.pkl')
+torch.save(net.state_dict(), 'model-scn3dsigbkd-diffusion.pkl')
 
