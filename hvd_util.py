@@ -41,9 +41,22 @@ def save_checkpoint(model, optimizer, epoch, path):
         torch.save(state, filepath)
 
 
-def accuracy(output, target):
+def accuracy(output, target, weighted=True, nclass=3):
     # get the index of the max log-probability
     pred = output.max(1, keepdim=True)[1]
+    '''
+    if(weighted):
+        w_acc = 0.
+        nnonzero = 0
+        for cl in range(nclass):
+            icl = np.where(target.view_as(pred).cpu() == cl)
+            if len(icl[0]) != 0:
+                w_acc += (pred[icl]).eq(target.view_as(pred)[icl]).cpu().float().sum()/float(len(icl[0]))
+                nnonzero += 1
+        return w_acc/float(nnonzero)
+    else:
+        return pred.eq(target.view_as(pred)).cpu().float().mean()
+    '''
     return pred.eq(target.view_as(pred)).cpu().float().mean()
 
 

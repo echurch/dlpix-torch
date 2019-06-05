@@ -28,18 +28,16 @@ dtypei = 'torch.cuda.LongTensor'
 
 
 global_Nclass = 3 # bkgd, 0vbb, 2vbb
-global_n_iterations_per_epoch = 100
+global_n_iterations_per_epoch = 10
 global_n_iterations_val = 4
-global_n_epochs = 40
-global_batch_size = 4  ## Can be at least 32, but need this many files to pick evts from in DataLoader
-
+global_n_epochs = 10
+global_batch_size = 192  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
 nvoxz = int(3000/vox) # num bins in z dimension 
 voxels = (int(1500/vox),int(1500/vox),int(3000/vox) ) # These are 1x1x1cm^3 voxels
 
-
-
+        
 def accuracy(output, target):
     """Computes the accuracy. we want the aggregate accuracy along with accuracies for the different labels. easiest to just use numpy..."""
     profile = False
@@ -104,9 +102,9 @@ class Model(nn.Module):
         x = nn.functional.softmax(x, dim=1)
         return x
  
-net = Model()
+net = Model().cuda()
 # print(net) # this is lots of info
-Net = net.cuda()
+#Net = net.cuda()
 
 tensor_list = []
 for dev_idx in range(torch.cuda.device_count()):
@@ -166,15 +164,14 @@ class BinnedDataset(Dataset):
             transform (callable, optional): Optional transform to be applied
                 on a sample.
         """
-        #ftype = [ "bb0nu/*.h5","bb2nu/*.h5","Bi214/*.h5","Tl208/*-OUT_PLANES.h5","Tl208/*-VESSEL.h5" ]
-        ftype = [ "bb0nu/*.h5","bb2nu/*.h5" ]
+        ftype = [ "Bi214*.h5","bb2nu*.h5" ]
+        #ftype = [ "bb2nu*.h5" ]
 
         self.files = []
         for ft in ftype:
             self.files.extend( glob.glob(path+"/"+ft) )
         print('Found %s files.'%len(self.files))
-        self.file_lengths = [ len((h5py.File(fname,'r'))['MC']['extents']) for fname in self.files ]
-        dim3 = np.array(( nvox,nvox,nvoxz))
+        self.file_lengths = [ len((h5py.File(fname,'r'))['weights']) for fname in self.files ]
 
         self.frac_train = frac_train
         self.frac_dataset = self.frac_train if train else (1 - self.frac_train)
@@ -207,70 +204,27 @@ class BinnedDataset(Dataset):
             if (bkd2nu):
                 self.np_labels = 2
 
+            weights = current_file['weights'][str(ind_evt)][:]
+            coords = current_file['coords'][str(ind_evt)][:]
+            H = (coords, weights)
 
-            extentset = current_file['MC']['extents']
+            return (H, self.np_labels)
 
-            if self.train:
-                current_index = ind_evt
-            else:
-                current_index = ind_evt + int(self.file_lengths[ind_file]*self.frac_train)
 
-            if current_index != 0:
-                current_starthit = int(extentset[current_index - 1]['last_hit'] + 1)
-            else:
-                current_starthit = 0
+def SparseCollate(batch):
+    data0 = torch.cat([torch.from_numpy(np.column_stack((item[0][0].T, np.ones(len(item[0][0].T))*b))) for b,item in enumerate(batch)], dim=0)
+    data1 = torch.cat([torch.from_numpy(item[0][1]) for item in batch], dim=0)
+    target = [item[1] for item in batch]
+    target = torch.LongTensor(target)
+    return [[data0, data1], target]            
 
-            current_endhit = int(extentset[current_index]['last_hit'])
-            if current_starthit >= current_endhit:
-                print('current start >= current end!!!')
-                print('file: %s'%self.files[ind_file])
-                print('evtidx: %s'%current_index)
-
-            hitset = current_file['MC']['hits'][current_starthit:current_endhit]            
-
-            data = np.array((hitset['hit_position'][:,0]+750.,hitset['hit_position'][:,1]+750.,hitset['hit_position'][:,2]+1500.))
-            weights=hitset['hit_energy']
-            dataT = data.T
-            
-            if dataT.sum() is 0:
-                print("Problem! Image is empty for current_index " + str(current_index))
-                raise
-
-            '''  Try to use whole pixelated volume now with scn. EC, 15-Apr-2019.            
-            xmin = np.argmin(dataT[:,0])
-            ymin = np.argmin(dataT[:,1])
-            zmin = np.argmin(dataT[:,2])
-            ##  view,chan,x
-            '''
-            ranges = tuple(vox*float(x) for x in voxels)
-#            H,edges = np.histogramdd(dataT,bins=voxels,range=ranges, weights=weights)
-            H,edges = np.histogramdd(dataT,bins=voxels,range=((0.,1500.),(0.,1500.),(0.,3000.)), weights=weights)
-
-            return ( H, self.np_labels )
-
-'''
-            (xmax,ymax,zmax) = np.unravel_index(np.argmax(H,axis=None),H.shape)
-            # Crop this back to central 2mx2mx2m about max activity point
-            ix = np.maximum(xmax-nvox/vox,0); ix = int(np.minimum(ix,voxels[0]-nvox))
-            iy = np.maximum(ymax-nvox/vox,0); iy = int(np.minimum(iy,voxels[1]-nvox))
-            iz = np.maximum(zmax-nvoxz/vox,0); iz = int(np.minimum(iz,voxels[2]-nvoxz))
-
-            x[0] = H[ix:ix+nvox,iy:iy+nvox,iz:iz+nvoxz] # The 0th element is for 1st (only) layer.
-
-            return ( x[0], self.np_labels )
-'''
-            
-
-#binned_tdata = BinnedDataset(path=[os.environ['HOME']+'/NEXT1Ton',os.environ['HOME']+'/NEXT1Ton/Bi214'],frac_train=0.8,train=True)
-#binned_vdata = BinnedDataset(path=[os.environ['HOME']+'/NEXT1Ton',os.environ['HOME']+'/NEXT1Ton/Bi214'],frac_train=0.8,train=False)
-binned_tdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton',frac_train=0.8,train=True)
-binned_vdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton',frac_train=0.8,train=False)
+binned_tdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton/preprocess',frac_train=0.8,train=True)
+binned_vdata = BinnedDataset(path=os.environ['HOME']+'/NEXT1Ton/preprocess',frac_train=0.8,train=False)
 
 import csv
 if hvd.rank()==0:
-    filename = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/'+'history.csv'
+    filename = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/'+'history-tmp.csv'
     csvfile = open(filename,'w')
-#with open('history.csv','w') as csvfile:
 
 
 fieldnames = ['Training_Validation', 'Iteration', 'Epoch', 'Loss',
@@ -280,7 +234,6 @@ fieldnames = ['Training_Validation', 'Iteration', 'Epoch', 'Loss',
 if hvd.rank()==0:
     history_writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
     history_writer.writeheader()
-thresh = 0.003 # deposited energy
 
 train_loss = hu.Metric('train_loss')
 train_accuracy = hu.Metric('train_accuracy')
@@ -290,7 +243,8 @@ val_accuracy = hu.Metric('val_accuracy')
 for epoch in range (global_n_epochs):
 
         train_gen = DataLoader(dataset=binned_tdata, batch_size=global_batch_size,
-                               shuffle=True, num_workers=global_batch_size)
+                               shuffle=True, num_workers=global_batch_size,
+                               collate_fn=SparseCollate )
         print('len(train_gen): %s'%len(train_gen))
         lr_step.step()
 
@@ -298,27 +252,18 @@ for epoch in range (global_n_epochs):
             net.train()
             optimizer.zero_grad()
 
-            feats, labels_var = minibatch            
+            feats, labels_var = minibatch
 
-            tmp = np.nonzero(feats>thresh)
-            # below 4-lines are torch-urous equivalent of numpy moveaxis to get batch indx on far right column.
-            coords = tmp
-            bno = coords[:,0].clone() # wo clone this won't copy, it seems.
-            coords[:,0:3] = tmp[:,1:4]
-            coords[:,3] = bno
-            indspgen = feats>thresh
+            coords, weights = feats
 
-            yhat = net([coords,feats[indspgen].type(dtype).unsqueeze(1), global_batch_size])
+            yhat = net([coords,weights.type(dtype).unsqueeze(1), global_batch_size])
 
-#            train_loss = loss(yhat, labels_var.type(dtypei)) #, weight_var[indspgen].type(dtype)) 
-#            train_accuracy = accuracy(yhat, labels_var)
             acc = hu.accuracy(yhat, labels_var.cuda(), weighted=True, nclass=global_Nclass)
             train_accuracy.update(acc)
             loss = nn.functional.cross_entropy(yhat, labels_var.cuda())
             train_loss.update(loss)
 
             loss.backward()
-#            optimizer.synchronize()
 
             optimizer.step()
 
@@ -340,22 +285,17 @@ for epoch in range (global_n_epochs):
 
         # done with iterations within a training epoch
         val_gen = DataLoader(dataset=binned_vdata, batch_size=global_batch_size,
-                                 shuffle=True, num_workers=global_batch_size)
+                                 shuffle=True, num_workers=global_batch_size,
+                                 collate_fn=SparseCollate)
 
         for iteration, minibatch in enumerate(val_gen):
-
-            pdb.set_trace()
             feats, labels_var = minibatch            
 
-            tmp = np.nonzero(feats>thresh)
-            # below 4-lines are torch-urous equivalent of numpy moveaxis to get batch indx on far right column.
-            coords = tmp
-            bno = coords[:,0].clone() # wo clone this won't copy, it seems.
-            coords[:,0:3] = tmp[:,1:4]
-            coords[:,3] = bno
-            indspgen = feats>thresh
+            feats, labels_var = minibatch
 
-            yhat = net([coords,feats[indspgen].type(dtype).unsqueeze(1), global_batch_size])
+            coords, weights = feats
+
+            yhat = net([coords,weights.type(dtype).unsqueeze(1), global_batch_size])
             
             #            val_accuracy = accuracy(y, yhat)
             acc = hu.accuracy(yhat, labels_var.cuda())   
