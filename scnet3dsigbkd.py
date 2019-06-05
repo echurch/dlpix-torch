@@ -28,9 +28,9 @@ dtypei = 'torch.cuda.LongTensor'
 
 
 global_Nclass = 2 # signal, bkgd
-global_n_iterations_per_epoch = 100
+global_n_iterations_per_epoch = 8
 global_n_iterations_val = 4
-global_n_epochs = 40
+global_n_epochs = 5
 global_batch_size = 14  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
@@ -327,6 +327,8 @@ for epoch in range (global_n_epochs):
                                  shuffle=True, num_workers=global_batch_size)
 
         for iteration, minibatch in enumerate(val_gen):
+
+            pdb.set_trace()
             feats, labels_var = minibatch            
 
             tmp = np.nonzero(feats>thresh)

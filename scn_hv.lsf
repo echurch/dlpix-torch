@@ -7,7 +7,7 @@
 cd /ccs/home/echurch/dlpix-torch
 module -q restore system
 
-source /ccs/proj/nph133/activate_next0.sh
+source /ccs/proj/nph133/software/setup_envnext.sh
 module list
 
 date
@@ -21,9 +21,9 @@ export HOROVOD_HIERARCHICAL_ALLREDUCE=1
 #export HOROVOD_TIMELINE=/ccs/home/echurch/dlpix-torch/hvd_timing.json
 #export CUDA_VISIBLE_DEVICES=0,1,2,3
 
-# note to run on 4 GPUs per node use jsrun -n arg, with arg=4*nnodes, with nnodes from above BSUB flag.
-jsrun -n 12 -a 1 -c 1 -g 1   python -m  scnet3dsigbkd.py  --summitdev --parallel --bind=none
+# note to run on 6 GPUs per node use jsrun -n arg, with arg=4*nnodes, with nnodes from above BSUB flag.
+jsrun -n 18 -a 1 -c 1 -g 1   python -m  scnet3dsigbkd.py  --summitdev --parallel --bind=none
 
 
-### that there are 54 summitdev nodes
+### that there are 54 summitdev nodes, 4576 summit nodes.
 
