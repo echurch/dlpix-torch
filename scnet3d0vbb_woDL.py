@@ -43,6 +43,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader,Dataset
 import sparseconvnet as scn
+from random import shuffle
 import time
 import sys
 import math
@@ -140,7 +141,7 @@ lr_step = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.9) # lr drop
 
 class BinnedDataset(Dataset):
 
-    def __init__(self, path, transform=None):
+    def __init__(self, path, shuffle=True, transform=None):
         """
         Args:
             path (string): Path to data files
@@ -155,6 +156,7 @@ class BinnedDataset(Dataset):
             self.files.extend( glob.glob(path+"/"+ft) )
         print('Found %s files.'%len(self.files))
 
+        self.shuffle = shuffle
         self.path = path
         self.lock = threading.Lock()
 
@@ -187,7 +189,10 @@ class BinnedDataset(Dataset):
 
         nbatches = int(len(current_file['weights'])/float(global_batch_size))
 
-        for idx in range(nbatches*global_batch_size):
+        idcs = [i for i in range(nbatches*global_batch_size)
+        if self.shuffle:
+            shuffle(idcs)
+        for idx in idcs:
             Htmp,ltmp = self.__getitem__(idx, current_file)
             H.append(Htmp)
             labels.append(ltmp)
@@ -219,7 +224,7 @@ def SparseCollate(batch):
     data1 = np.concatenate([item[1] for item in batch])
     return data0, data1
 
-binned_data = BinnedDataset(path=os.environ['PROJWORK']+'/nph133/next1t/batch_datafiles')
+binned_data = BinnedDataset(path=os.environ['PROJWORK']+'/nph133/next1t/batch_datafiles', shuffle=True)
 
 for epoch in range (global_n_epochs):
 
