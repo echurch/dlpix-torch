@@ -3,14 +3,17 @@ import numpy as np
 import h5py
 
 cimport numpy as np
-from cython.parallel import prange
+from multiprocessing import Pool
+from functools import partial
 
-cdef int vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
+cdef int vox = 5 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 cdef int nvox = int(1500/vox) # num bins in x,y dimension 
 cdef int nvoxz = int(3000/vox) # num bins in z dimension 
 cdef (int,int,int) voxels = (int(1500/vox),int(1500/vox),int(3000/vox) ) # These are 1x1x1cm^3 voxels
 
-cdef np.ndarray diffusion(np.ndarray hitset):
+cdef int nworkers = 80
+
+cpdef np.ndarray diffusion(np.ndarray hitset):
     """Simulates diffusion in the MC hits"""
     cdef float Ionization = 22./1.e6 # number of ionization electrons
     cdef float Dif_tran_star  = 3500. # rootbar micron rootcm
@@ -22,7 +25,7 @@ cdef np.ndarray diffusion(np.ndarray hitset):
 
     cdef float escale = 100. # actually generate 1/escale electrons and weight hists
 
-    cdef np.ndarray H = np.zeros((150,150,300))
+    cdef np.ndarray H = np.zeros(voxels)
     cdef np.ndarray Htmp
 
     cdef int Nelectrons
@@ -53,77 +56,82 @@ cdef np.ndarray diffusion(np.ndarray hitset):
     return H
 
 
+
+
 cdef str path=os.environ['HOME']+'/NEXT1Ton'
-cdef str fsample = 'Tl208'
-cdef str fgeom = 'INNER_SHIELDING'
-cdef list ftype = [ fsample+"/*"+'-000[0-4]-'+fgeom+".h5" ]
+cdef str fsample = 'bb0nu'
+cdef str fgeom = 'ACTIVE'
+cdef list ftype = [ fsample+"/*"+'-0000-'+fgeom+".h5" ]
 #cdef list ftype = [ fsample+"/*"+fgeom+".h5" ]
 
 def process_MC():
-    return process_MC_c()
-
-cdef int process_MC_c():
     cdef list files = []
     cdef str ft 
     for ft in ftype:
         files.extend( glob.glob(path+"/"+ft) )
     print('Found %s files.'%len(files))
-    
-    cdef str foutname = os.environ['HOME']+'/NEXT1Ton/preprocess/'+fsample+'-00-'+fgeom+'_diffusion.h5'
+   
+    cdef str foutname = os.environ['PROJWORK']+'/nph133/next1t/batch_datafiles/'+fsample+'-00-'+fgeom+'_diffusion.h5'
     cdef object h5file = h5py.File(foutname,'w')
     cdef np.ndarray fname
 
     cdef str fl
     cdef list flengths = [len(h5py.File(fl)['MC']['extents']) for fl in files ]
-
-    cdef list events
+    
     cdef np.ndarray feats
+    cdef float thresh = 45 # number of electrons
     
     cdef object grpw = h5file.create_group('weights')
     cdef object grpc = h5file.create_group('coords')
     cdef object grpf = h5file.create_group('filenames')
     cdef object grpe = h5file.create_group('events')
     
-    cdef int outidx
-    cdef np.ndarray extentset, hitset
-    cdef int ievt, current_index, current_starthit, current_endhit, ifile, ifl
-    cdef float thresh = 45 # number of electrons
+    
+    cdef list hitpool
+
+    cdef np.ndarray extentset, hitset, events
+    cdef int ievt, outid, current_index, current_starthit, current_endhit, ifile, ifl
 
     for ifile in range(len(files)):
         print('Opening file %s'%files[ifile])
         with h5py.File(files[ifile],'r') as current_file:
             fname = np.array([np.string_(fsample + '/' + files[ifile].split('/')[-1])])
             
-            events = []
             extentset = current_file['MC']['extents'][:]
-            print('Found %s events.'%len(extentset))
+
+            hitpool = []
+
             for ievt in range(len(extentset)):
-                outidx = sum([flengths[ifl] for ifl in range(ifile)]) + ievt
-    
+                outid = sum([flengths[ifl] for ifl in range(ifile)]) + ievt
+
                 current_index = ievt
-                events.append(extentset['evt_number'][current_index])
-             
+    
                 if current_index != 0:
                     current_starthit = int(extentset[current_index - 1]['last_hit'] + 1)
                 else:
                     current_starthit = 0
-             
-                current_endhit = int(extentset[current_index]['last_hit'])
-             
-                hitset = current_file['MC']['hits'][current_starthit:current_endhit]
-
-                feats = diffusion(hitset)
-             
-                print('Saving %s voxels.'%len(feats[feats > thresh]))         
     
-                grpw.create_dataset( str(outidx), data=feats[feats > thresh] )
-                grpc.create_dataset( str(outidx), data=np.nonzero(feats > thresh) )
-                grpf.create_dataset( str(outidx), data=fname )
-                grpe.create_dataset( str(outidx), data=events )
+                current_endhit = int(extentset[current_index]['last_hit'])
+    
+                hitpool.append(current_file['MC']['hits'][current_starthit:current_endhit])
+    
+            print('Processing %s events.'%len(extentset))
+            with Pool(processes=nworkers) as pool:
+                featset = pool.map(diffusion, hitpool)
+
+            print('Saving %s events.'%len(extentset))
+            for ievt in range(len(extentset)):
+                outid = sum([flengths[ifl] for ifl in range(ifile)]) + ievt
+                feats = featset[ievt]
+                print('Saving %s voxels.'%len(feats[feats > thresh]))
+                events = np.array([extentset['evt_number'][ievt]])
+            
+                grpw.create_dataset( str(outid), data=feats[feats > thresh] )
+                grpc.create_dataset( str(outid), data=np.nonzero(feats > thresh) )
+                grpf.create_dataset( str(outid), data=fname )
+                grpe.create_dataset( str(outid), data=events )
 
     h5file.close()
                 
     print('Done processing files.')
-
-    return 0
     
