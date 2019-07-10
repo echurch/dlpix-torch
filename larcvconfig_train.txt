@@ -1,0 +1,27 @@
+TrainIO: {
+  Verbosity: 2 
+  EnableFilter: false 
+  NumThreads: 4 
+  InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_train-debug2.h5"]
+  NumBatchStorage: 4 
+  RandomSeed: 0 
+  RandomAccess: 0 
+  ProcessType: ["BatchFillerSparseTensor3D","BatchFillerPIDLabel"]
+  ProcessName: ["data","label"]
+
+  ProcessList: {
+    data: {
+      Verbosity: 3
+      Tensor3DProducer: "voxels"
+      IncludeValues: true
+      MaxVoxels: 1000
+      UnfilledVoxelValue: -999
+      Augment: true
+    }
+    label: {
+      Verbosity: 3
+      ParticleProducer: label
+      PdgClassList: [0,1,2]
+    }
+  }
+}
