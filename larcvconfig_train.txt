@@ -2,8 +2,8 @@ TrainIO: {
   Verbosity: 2 
   EnableFilter: false 
   NumThreads: 4 
-  InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_train-debug2.h5"]
-  NumBatchStorage: 4 
+  InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_0_train.h5","/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_1_train.h5","/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_2_train.h5","/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_3_train.h5"]
+  NumBatchStorage: 1 
   RandomSeed: 0 
   RandomAccess: 0 
   ProcessType: ["BatchFillerSparseTensor3D","BatchFillerPIDLabel"]

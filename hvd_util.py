@@ -43,7 +43,7 @@ def save_checkpoint(model, optimizer, epoch, path):
 
 def accuracy(output, target, weighted=True, nclass=3):
     # get the index of the max log-probability
-    pred = output.max(1, keepdim=True)[1]
+    pred = output.max(1, keepdim=True)[1].cpu()
     if(weighted):
         w_acc = 0.
         nnonzero = 0

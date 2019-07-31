@@ -8,7 +8,6 @@ import hvd_util as hu
 import pdb
 
 from larcv import larcv_interface
-import tempfile
 from collections import OrderedDict
 
 hvd.init()
@@ -24,32 +23,28 @@ print("Number of gpus per rank {:d}".format(torch.cuda.device_count()))
 os.environ["CUDA_VISIBLE_DEVICES"] = str(hvd.local_rank())
 torch.cuda.manual_seed(seed)
 
-global_n_cuda_workers = hvd.size()
-
 global_Nclass = 3 # bkgd, 0vbb, 2vbb
-global_n_iterations_per_epoch = 1900
+global_n_iterations_per_epoch = 1000
 global_n_iterations_val = 4
-global_n_epochs = 100
-global_batch_size = 192  ## Can be at least 32, but need this many files to pick evts from in DataLoader
+global_n_epochs = 10
+global_batch_size = 64  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
 nvoxz = int(3000/vox) # num bins in z dimension 
 voxels = (int(1500/vox),int(1500/vox),int(3000/vox) ) # These are 1x1x1cm^3 voxels
 
+mode = 'train'
+aux_mode ='test'
+max_voxels= '1000'
+producer='sparse3d_voxels_group'
+
 
 import torch.optim as optim
 import torch.nn.functional as F
 import sparseconvnet as scn
-import time
-import sys
 
 dimension = 3
 nPlanes = 1
-
-mode = 'train'
-aux_mode ='test'
-max_voxels= 1000
-producer="\"voxels\""
 
 def larcvsparse_to_scnsparse_3d(input_array):
     # This format converts the larcv sparse format to
@@ -72,17 +67,20 @@ def larcvsparse_to_scnsparse_3d(input_array):
     features = np.expand_dims(split_tensors[-1][non_zero_inds],axis=-1)
 
     # Lastly, we need to stack up the coordinates, which we do here:
-    dimension_list = []
+    dimension_list = [0]*(len(split_tensors)-1)
     for i in range(len(split_tensors) - 1):
-        dimension_list.append(split_tensors[i][non_zero_inds])
+        dimension_list[i] = split_tensors[i][non_zero_inds]
 
     # Tack on the batch index to this list for stacking:
     dimension_list.append(batch_index)
 
     # And stack this into one np array:
     dimension = np.stack(dimension_list, axis=-1)
+    #coords = np.array([dimension_list[iwt] for iwt in range(len(dimension_list))])
 
-    output_array = (dimension, features, batch_size,)
+    output_array = (torch.from_numpy(dimension).to(torch.device("cuda")),
+                    torch.from_numpy(features).to(torch.device("cuda")),
+                    batch_size,)
     return output_array
 
 '''
@@ -119,11 +117,11 @@ class Model(nn.Module):
         return x
  
 net = Model().cuda()
-            
 
+modelfilepath = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/models/'
 try:
     print ("Reading weights from file")
-    net.load_state_dict(torch.load('./model-scn3dsigbkd-diffusion-larcv.pkl'))
+    net.load_state_dict(torch.load(modelfilepath+'model-scn3dsigbkd-diffusion-larcv.pkl'))
     net.eval()
     print("Succeeded.")
 except:
@@ -133,7 +131,6 @@ except:
 hvd.broadcast_parameters(net.state_dict(), root_rank=0)
 
 learning_rate = 0.001 # 0.010
-#optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=0.9)
 # Horovod: scale learning rate by the number of GPUs.
 optimizer = optim.SGD(net.parameters(), lr=learning_rate * hvd.size(),
                       momentum=0.9)
@@ -153,17 +150,11 @@ hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
 lr_step = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.9) # lr drops to lr*0.9^N after 5N epochs
 
-fpath_top = os.environ['PROJWORK']+'/nph133/next1t/larcv_datafiles'
-ftype_trn = '*_diffusion_larcv_train-debug.h5'
-ftype_tst = '*_diffusion_larcv_test-debug.h5'
-
-fpath_train = glob.glob(fpath_top+'/'+ftype_trn)
-fpath_test = glob.glob(fpath_top+'/'+ftype_tst)
-
 # config files
-main_fname = 'larcvconfig_train.txt'
-aux_fname = 'larcvconfig_test.txt'
+main_fname = '/ccs/home/kwoodruff/dlpix-torch/larcvconfig_train.txt'
+aux_fname = '/ccs/home/kwoodruff/dlpix-torch/larcvconfig_test.txt'
 
+print('initializing larcv io')
 # initilize io
 _larcv_interface = larcv_interface.larcv_interface()
 
@@ -180,19 +171,18 @@ aux_io_config = {
     'verbosity'   : 1,
     'make_copy'   : True
 }
-
 # Build up the data_keys:
 data_keys = OrderedDict()
 data_keys['image'] = 'data'
-data_keys['Verbosity'] = '3'
-data_keys['Tensor3DProducer'] = producer
-data_keys['IncludeValues'] = 'true'
-data_keys['MaxVoxels'] = max_voxels
-data_keys['UnfilledVoxelValue'] = '-999'
-data_keys['Augment'] = 'true'
+data_keys['label'] = 'label'
+aux_data_keys = OrderedDict()
+aux_data_keys['image'] = 'test_data'
+aux_data_keys['label'] = 'test_label'
 
+print('preparing larcv interface manager')
 _larcv_interface.prepare_manager(mode, io_config, global_batch_size, data_keys)
-_larcv_interface.prepare_manager(aux_mode, aux_io_config, global_batch_size, data_keys)
+_larcv_interface.prepare_manager(aux_mode, aux_io_config, global_batch_size, aux_data_keys)
+
 
 if hvd.rank()==0:
     filename = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/'+'history-diffusion-larcv.csv'
@@ -212,6 +202,7 @@ train_accuracy = hu.Metric('train_accuracy')
 val_loss = hu.Metric('val_loss')
 val_accuracy = hu.Metric('val_accuracy')
 
+print('start training')
 for epoch in range (global_n_epochs):
 
     tr_epoch_size = _larcv_interface.size('train')
@@ -241,9 +232,10 @@ for epoch in range (global_n_epochs):
 
         yhat = net(minibatch_data['image'])
 
-        acc = hu.accuracy(yhat, minibatch_data['label'], weighted=True, nclass=global_Nclass)
+        target = torch.from_numpy(minibatch_data['label']).max(1, keepdim=True)[1]
+        acc = hu.accuracy(yhat, target, weighted=True, nclass=global_Nclass)
         train_accuracy.update(acc)
-        loss = nn.functional.cross_entropy(yhat, minibatch_data['label'])
+        loss = nn.functional.cross_entropy(yhat, target.reshape(-1).to(torch.device("cuda")))
         train_loss.update(loss)
 
         loss.backward()
@@ -287,9 +279,10 @@ for epoch in range (global_n_epochs):
 
         yhat = net(minibatch_data['image'])
         
-        acc = hu.accuracy(yhat, minibatch_data['label'])   
+        target = torch.from_numpy(minibatch_data['label']).max(1, keepdim=True)[1]
+        acc = hu.accuracy(yhat, target, weighted=True, nclass=global_Nclass)
         val_accuracy.update(acc)
-        loss = nn.functional.cross_entropy(yhat, minibatch_data['label'])
+        loss = nn.functional.cross_entropy(yhat, target.reshape(-1).to(torch.device("cuda")))
         val_loss.update(loss)
 
         print("Val.Epoch: {}, Iteration: {}, Train,Val Loss: [{:.4g},{:.4g}], *** Train,Val Accuracy: [{:.4g},{:.4g}] ***".format(epoch, iteration,float(train_loss.avg), val_loss.avg, train_accuracy.avg, val_accuracy.avg ))
@@ -313,5 +306,5 @@ print("host: hvd.rank()/hvd.local_rank() are: " + str(hostname) + ": " + str(hvd
 
 
 print("end of epoch")
-torch.save(net.state_dict(), 'model-scn3dsigbkd-diffusion-larcv.pkl')
+torch.save(net.state_dict(), modelfilepath+'model-scn3dsigbkd-diffusion-larcv.pkl')
 

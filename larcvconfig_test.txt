@@ -2,15 +2,15 @@ TestIO: {
   Verbosity: 2 
   EnableFilter: false 
   NumThreads: 4 
-  InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_test-debug2.h5"]
-  NumBatchStorage: 4 
+  InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_0_test.h5","/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_1_test.h5","/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_2_test.h5","/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_3_test.h5"]
+  NumBatchStorage: 1 
   RandomSeed: 0 
   RandomAccess: 0 
   ProcessType: ["BatchFillerSparseTensor3D","BatchFillerPIDLabel"]
-  ProcessName: ["aux_data","aux_label"]
+  ProcessName: ["test_data","test_label"]
 
   ProcessList: {
-    data: {
+    test_data: {
       Verbosity: 3
       Tensor3DProducer: "voxels"
       IncludeValues: true
@@ -18,7 +18,7 @@ TestIO: {
       UnfilledVoxelValue: -999
       Augment: true
     }
-    label: {
+    test_label: {
       Verbosity: 3
       ParticleProducer: label
       PdgClassList: [0,1,2]
