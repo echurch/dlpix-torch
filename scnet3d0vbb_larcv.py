@@ -5,9 +5,11 @@ import os, glob
 import csv
 import numpy as np
 import hvd_util as hu
+from mpi4py import MPI
 import pdb
 
-from larcv import larcv_interface
+##from larcv import larcv_interface
+from larcv.distributed_queue_interface import queue_interface
 from collections import OrderedDict
 
 hvd.init()
@@ -151,12 +153,14 @@ hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 lr_step = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.9) # lr drops to lr*0.9^N after 5N epochs
 
 # config files
-main_fname = '/ccs/home/kwoodruff/dlpix-torch/larcvconfig_train.txt'
-aux_fname = '/ccs/home/kwoodruff/dlpix-torch/larcvconfig_test.txt'
+main_fname = '/ccs/home/echurch/dlpix-torch/larcvconfig_train.txt'
+aux_fname = '/ccs/home/echurch/dlpix-torch/larcvconfig_test.txt'
 
 print('initializing larcv io')
 # initilize io
-_larcv_interface = larcv_interface.larcv_interface()
+##_larcv_interface = larcv_interface.larcv_interface()
+_larcv_interface = queue_interface()
+
 
 # Prepare data managers:
 io_config = {
@@ -180,8 +184,8 @@ aux_data_keys['image'] = 'test_data'
 aux_data_keys['label'] = 'test_label'
 
 print('preparing larcv interface manager')
-_larcv_interface.prepare_manager(mode, io_config, global_batch_size, data_keys)
-_larcv_interface.prepare_manager(aux_mode, aux_io_config, global_batch_size, aux_data_keys)
+_larcv_interface.prepare_manager(mode, io_config, global_batch_size, data_keys, color = MPI.COMM_WORLD.rank)
+_larcv_interface.prepare_manager(aux_mode, aux_io_config, global_batch_size, aux_data_keys, color = MPI.COMM_WORLD.rank)
 
 
 if hvd.rank()==0:
