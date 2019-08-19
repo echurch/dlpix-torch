@@ -1,9 +1,9 @@
 TestIO: {
   Verbosity: 2 
   EnableFilter: false 
-  NumThreads: 4 
-  InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_0_test.h5","/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_1_test.h5","/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_2_test.h5","/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_3_test.h5"]
-  NumBatchStorage: 1 
+  NumThreads: 6
+  InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_0_1file_test.h5"]
+  NumBatchStorage: 6 
   RandomSeed: 0 
   RandomAccess: 0 
   ProcessType: ["BatchFillerSparseTensor3D","BatchFillerPIDLabel"]

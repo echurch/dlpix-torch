@@ -50,7 +50,7 @@ def accuracy(output, target, weighted=True, nclass=3):
         for cl in range(nclass):
             icl = np.where(target.view_as(pred).cpu() == cl)
             if len(icl[0]) != 0:
-                w_acc += (pred[icl]).eq(target.view_as(pred)[icl]).cpu().float().sum()/float(len(icl[0]))
+                w_acc += (pred[icl]).eq(target.cpu().view_as(pred)[icl]).cpu().float().sum()/float(len(icl[0]))
                 nnonzero += 1
         return w_acc/float(nnonzero)
     else:

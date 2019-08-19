@@ -7,7 +7,7 @@ import numpy as np
 import hvd_util as hu
 import pdb
 
-from larcv import larcv_interface
+from larcv.distributed_larcv_interface import larcv_interface
 from collections import OrderedDict
 
 hvd.init()
@@ -24,10 +24,10 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str(hvd.local_rank())
 torch.cuda.manual_seed(seed)
 
 global_Nclass = 3 # bkgd, 0vbb, 2vbb
-global_n_iterations_per_epoch = 1000
+global_n_iterations_per_epoch = 2000
 global_n_iterations_val = 4
 global_n_epochs = 10
-global_batch_size = 64  ## Can be at least 32, but need this many files to pick evts from in DataLoader
+global_batch_size = 216  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
 nvoxz = int(3000/vox) # num bins in z dimension 
@@ -78,10 +78,23 @@ def larcvsparse_to_scnsparse_3d(input_array):
     dimension = np.stack(dimension_list, axis=-1)
     #coords = np.array([dimension_list[iwt] for iwt in range(len(dimension_list))])
 
-    output_array = (torch.from_numpy(dimension).to(torch.device("cuda")),
-                    torch.from_numpy(features).to(torch.device("cuda")),
-                    batch_size,)
+    output_array = (dimension, features, batch_size,)
     return output_array
+
+def to_torch(minibatch_data):
+    for key in minibatch_data:
+        if key == 'entries' or key =='event_ids':
+            continue
+        if key == 'image':
+            minibatch_data['image'] = (
+                    torch.tensor(minibatch_data['image'][0]).long(),
+                    torch.tensor(minibatch_data['image'][1], device=torch.device('cuda')).float(),
+                    minibatch_data['image'][2],
+                )
+        else:
+            minibatch_data[key] = torch.tensor(minibatch_data[key],device=torch.device('cuda'))
+    
+    return minibatch_data
 
 '''
 Model below is an example, inspired by 
@@ -118,6 +131,8 @@ class Model(nn.Module):
  
 net = Model().cuda()
 
+criterion = torch.nn.CrossEntropyLoss()
+
 modelfilepath = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/models/'
 try:
     print ("Reading weights from file")
@@ -127,17 +142,19 @@ try:
 except:
     print ("Failed to read pkl model. Proceeding from scratch.")
 
-# Horovod: broadcast parameters.
-hvd.broadcast_parameters(net.state_dict(), root_rank=0)
 
 learning_rate = 0.001 # 0.010
 # Horovod: scale learning rate by the number of GPUs.
 optimizer = optim.SGD(net.parameters(), lr=learning_rate * hvd.size(),
                       momentum=0.9)
 # Horovod: wrap optimizer with DistributedOptimizer.
+'''
 optimizer = hvd.DistributedOptimizer(optimizer,
                                      named_parameters=net.named_parameters(),
                                      compression=hvd.Compression.none)  # to start
+'''
+optimizer = hvd.DistributedOptimizer(optimizer,
+                                     named_parameters=net.named_parameters())
 
 # This moves the optimizer to the GPU:
 for state in optimizer.state.values():
@@ -145,6 +162,7 @@ for state in optimizer.state.values():
         if torch.is_tensor(v):
             state[k] = v.cuda()
 
+# Horovod: broadcast parameters.
 hvd.broadcast_parameters(net.state_dict(), root_rank=0)
 hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
@@ -156,7 +174,12 @@ aux_fname = '/ccs/home/kwoodruff/dlpix-torch/larcvconfig_test.txt'
 
 print('initializing larcv io')
 # initilize io
-_larcv_interface = larcv_interface.larcv_interface()
+root_rank = hvd.size() - 1
+# read_option=1 is ==> read_from_all_ranks
+#_larcv_interface = larcv_interface(root=root_rank, read_option='read_from_all_ranks', 
+#                                    local_rank=hvd.local_rank(), local_size=hvd.local_size())
+_larcv_interface = larcv_interface(root=root_rank, read_option='read_from_single_rank', 
+                                    local_rank=hvd.local_rank(), local_size=hvd.local_size())
 
 # Prepare data managers:
 io_config = {
@@ -211,6 +234,7 @@ for epoch in range (global_n_epochs):
     for param_group in optimizer.param_groups:
         print('learning rate: %s'%param_group['lr'])
 
+    net.train()
     for iteration in range(tr_epoch_size):
         net.train()
         optimizer.zero_grad()
@@ -229,13 +253,16 @@ for epoch in range (global_n_epochs):
             minibatch_data[new_key] = minibatch_data.pop(key)            
         
         minibatch_data['image'] = larcvsparse_to_scnsparse_3d(minibatch_data['image'])
+        minibatch_data = to_torch(minibatch_data)
 
         yhat = net(minibatch_data['image'])
 
-        target = torch.from_numpy(minibatch_data['label']).max(1, keepdim=True)[1]
+        values, target = torch.max(minibatch_data['label'], dim=1)
+
         acc = hu.accuracy(yhat, target, weighted=True, nclass=global_Nclass)
         train_accuracy.update(acc)
-        loss = nn.functional.cross_entropy(yhat, target.reshape(-1).to(torch.device("cuda")))
+
+        loss = criterion(yhat, target)
         train_loss.update(loss)
 
         loss.backward()
@@ -243,6 +270,7 @@ for epoch in range (global_n_epochs):
         optimizer.step()
 
         net.eval()
+
 
         print("Train.Rank,Epoch: {},{}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g}]".format(hvd.rank(), 
                                                    epoch, iteration,float(train_loss.avg), train_accuracy.avg))
@@ -261,7 +289,9 @@ for epoch in range (global_n_epochs):
 
     # done with iterations within a training epoch
     te_epoch_size = _larcv_interface.size('test')
+    net.eval()
     for iteration in range(te_epoch_size):
+        net.eval()
         minibatch_data = _larcv_interface.fetch_minibatch_data(aux_mode, fetch_meta_data=False)
         minibatch_dims = _larcv_interface.fetch_minibatch_dims(aux_mode)
 
@@ -276,19 +306,23 @@ for epoch in range (global_n_epochs):
             minibatch_data[new_key] = minibatch_data.pop(key)            
         
         minibatch_data['image'] = larcvsparse_to_scnsparse_3d(minibatch_data['image'])
+        minibatch_data = to_torch(minibatch_data)
 
         yhat = net(minibatch_data['image'])
         
-        target = torch.from_numpy(minibatch_data['label']).max(1, keepdim=True)[1]
+        values, target = torch.max(minibatch_data['label'], dim=1)
+
         acc = hu.accuracy(yhat, target, weighted=True, nclass=global_Nclass)
         val_accuracy.update(acc)
-        loss = nn.functional.cross_entropy(yhat, target.reshape(-1).to(torch.device("cuda")))
+
+        loss = criterion(yhat, target)
         val_loss.update(loss)
 
         print("Val.Epoch: {}, Iteration: {}, Train,Val Loss: [{:.4g},{:.4g}], *** Train,Val Accuracy: [{:.4g},{:.4g}] ***".format(epoch, iteration,float(train_loss.avg), val_loss.avg, train_accuracy.avg, val_accuracy.avg ))
 
         output = {'Training_Validation':'Validation','Iteration':iteration, 'Epoch':epoch, 
                   'Loss':float(val_loss.avg), 'Accuracy':val_accuracy.avg, "Learning Rate":learning_rate}
+
         if hvd.rank()==0:
             history_writer.writerow(output)
         if iteration>=global_n_iterations_val:
