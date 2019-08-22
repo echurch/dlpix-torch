@@ -1,7 +1,7 @@
 #BSUB -P nph133
 #BSUB -J scn3d
 #BSUB -o scn3d%J.o
-#BSUB -W 120
+#BSUB -W 30
 #BSUB -nnodes 16
 
 cd /ccs/home/echurch/dlpix-torch
@@ -15,10 +15,16 @@ date
 hostname
 export NCCL_DEBUG=INFO
 export NCCL_P2P_DISABLE=1
+
+export PAMI_ENABLE_STRIPING=1
+export PAMI_IBV_ADAPTER_AFFINITY=1
+export PAMI_IBV_DEVICE_NAME="mlx5_0:1,mlx5_3:1"
+export PAMI_IBV_DEVICE_NAME_1="mlx5_3:1,mlx5_0:1"
+
 #HOSTS_STR=$(python get_hosts.py)
 #echo "$HOSTS_STR"
 
-export HOROVOD_HIERARCHICAL_ALLREDUCE=1
+#export HOROVOD_HIERARCHICAL_ALLREDUCE=1
 #export HOROVOD_TIMELINE=/ccs/home/echurch/dlpix-torch/hvd_timing.json
 #export CUDA_VISIBLE_DEVICES=0,1,2,3
 
