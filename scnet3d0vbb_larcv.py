@@ -29,7 +29,7 @@ global_Nclass = 3 # bkgd, 0vbb, 2vbb
 global_n_iterations_per_epoch = 2000
 global_n_iterations_val = 4
 global_n_epochs = 10
-global_batch_size = 216  ## Can be at least 32, but need this many files to pick evts from in DataLoader
+global_batch_size = hvd.size()*200  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
 nvoxz = int(3000/vox) # num bins in z dimension 
@@ -138,7 +138,7 @@ criterion = torch.nn.CrossEntropyLoss()
 modelfilepath = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/models/'
 try:
     print ("Reading weights from file")
-    net.load_state_dict(torch.load(modelfilepath+'model-scn3dsigbkd-diffusion-larcv.pkl'))
+    net.load_state_dict(torch.load(modelfilepath+'model-scn3dsigbkd-fanal-10cm-larcv.pkl'))
     net.eval()
     print("Succeeded.")
 except:
@@ -171,8 +171,8 @@ hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 lr_step = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.9) # lr drops to lr*0.9^N after 5N epochs
 
 # config files
-main_fname = '/ccs/home/echurch/dlpix-torch/larcvconfig_train.txt'
-aux_fname = '/ccs/home/echurch/dlpix-torch/larcvconfig_test.txt'
+main_fname = '/ccs/home/kwoodruff/dlpix-torch/larcvconfig_train.txt'
+aux_fname = '/ccs/home/kwoodruff/dlpix-torch/larcvconfig_test.txt'
 
 print('initializing larcv io')
 # initilize io
@@ -214,7 +214,7 @@ _larcv_interface.prepare_manager(aux_mode, aux_io_config, global_batch_size, aux
 
 
 if hvd.rank()==0:
-    filename = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/'+'history-diffusion-larcv.csv'
+    filename = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/'+'history-fanal-10cm-larcv.csv'
     csvfile = open(filename,'w')
 
 
@@ -234,7 +234,10 @@ val_accuracy = hu.Metric('val_accuracy')
 print('start training')
 for epoch in range (global_n_epochs):
 
-    tr_epoch_size = _larcv_interface.size('train')
+    tr_epoch_size = int(_larcv_interface.size('train')/global_batch_size)
+    print('batches per epoch: %s'%tr_epoch_size)
+    te_epoch_size = int(_larcv_interface.size('test')/global_batch_size)
+    print('test batches per epoch: %s'%te_epoch_size)
 
     lr_step.step()
     for param_group in optimizer.param_groups:
@@ -346,5 +349,5 @@ print("host: hvd.rank()/hvd.local_rank() are: " + str(hostname) + ": " + str(hvd
 
 
 print("end of epoch")
-torch.save(net.state_dict(), modelfilepath+'model-scn3dsigbkd-diffusion-larcv.pkl')
+torch.save(net.state_dict(), modelfilepath+'model-scn3dsigbkd-fanal-10cm-larcv.pkl')
 
