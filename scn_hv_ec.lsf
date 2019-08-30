@@ -1,7 +1,7 @@
 #BSUB -P nph133
 #BSUB -J scn3d
 #BSUB -o scn3d%J.o
-#BSUB -W 30
+#BSUB -W 120
 #BSUB -nnodes 16
 
 cd /ccs/home/echurch/dlpix-torch
