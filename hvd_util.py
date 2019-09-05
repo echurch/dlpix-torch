@@ -41,7 +41,7 @@ def save_checkpoint(model, optimizer, epoch, path):
         torch.save(state, filepath)
 
 
-def accuracy(output, target, weighted=True, nclass=3):
+def accuracy(output, target, weighted=True, nclass=2):
     # get the index of the max log-probability
     pred = output.max(1, keepdim=True)[1].cpu()
     if(weighted):
