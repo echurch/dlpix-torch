@@ -18,7 +18,6 @@ print("hvd.size() is: " + str(hvd.size()))
 print("hvd.local_rank() is: " + str(hvd.local_rank()))
 print("hvd.rank() is: " + str(hvd.rank()))
 
-print("Number of gpus per rank {:d}".format(torch.cuda.device_count()))
 # Horovod: pin GPU to local rank.
 #torch.cuda.set_device(hvd.local_rank())
 
@@ -27,10 +26,10 @@ torch.cuda.manual_seed(seed)
 
 global_Nclass = 2 # bkgd, 0vbb, 2vbb
 global_n_iterations_per_epoch = 2000
-global_n_iterations_val = 4
+global_n_iterations_val = 2000
 global_n_epochs = 100
-global_batch_size = 30
-#global_batch_size = hvd.size()*200  ## Can be at least 32, but need this many files to pick evts from in DataLoader
+#global_batch_size = 30
+global_batch_size = hvd.size()*200  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(1500/vox) # num bins in x,y dimension 
 nvoxz = int(3000/vox) # num bins in z dimension 
@@ -129,17 +128,16 @@ class Model(nn.Module):
         x = x.view(-1, 32*46*46*96)
         x = nn.functional.elu(self.linear(x))
         x = self.linear2(x)
-        x = nn.functional.softmax(x, dim=1)
+        x = nn.functional.log_softmax(x, dim=1)
         return x
  
 net = Model().cuda()
-
-criterion = torch.nn.CrossEntropyLoss()
+criterion = torch.nn.NLLLoss().cuda()
 
 modelfilepath = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/models/'
 try:
     print ("Reading weights from file")
-    net.load_state_dict(torch.load(modelfilepath+'model-scn3dsigbkd-fanal-10cm-larcv-oft.pkl'))
+    net.load_state_dict(torch.load(modelfilepath+'model-scn3dsigbkd-fanal-10cm-larcv.pkl'))
     net.eval()
     print("Succeeded.")
 except:
@@ -175,7 +173,6 @@ lr_step = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.9) # lr drop
 main_fname = '/ccs/home/kwoodruff/dlpix-torch/larcvconfig_train.txt'
 aux_fname = '/ccs/home/kwoodruff/dlpix-torch/larcvconfig_test.txt'
 
-print('initializing larcv io')
 # initilize io
 root_rank = hvd.size() - 1
 # read_option=1 is ==> read_from_all_ranks
@@ -209,13 +206,13 @@ aux_data_keys = OrderedDict()
 aux_data_keys['image'] = 'test_data'
 aux_data_keys['label'] = 'test_label'
 
-print('preparing larcv interface manager')
 _larcv_interface.prepare_manager(mode, io_config, global_batch_size, data_keys, color = MPI.COMM_WORLD.rank)
 _larcv_interface.prepare_manager(aux_mode, aux_io_config, global_batch_size, aux_data_keys, color = MPI.COMM_WORLD.rank)
 
 
+historyfilepath = os.environ['PROJWORK']+'/nph133/next1t/csvout/'
 if hvd.rank()==0:
-    filename = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/'+'history-fanal-10cm-larcv_oft.csv'
+    filename = historyfilepath+'history-fanal-10cm-larcv_treval.csv'
     csvfile = open(filename,'w')
 
 
@@ -232,7 +229,6 @@ train_accuracy = hu.Metric('train_accuracy')
 val_loss = hu.Metric('val_loss')
 val_accuracy = hu.Metric('val_accuracy')
 
-print('start training')
 for epoch in range (global_n_epochs):
 
     tr_epoch_size = int(_larcv_interface.size('train')/global_batch_size)
@@ -249,7 +245,8 @@ for epoch in range (global_n_epochs):
         net.train()
         optimizer.zero_grad()
 
-        minibatch_data = _larcv_interface.fetch_minibatch_data(mode, fetch_meta_data=False)
+        _larcv_interface.prepare_next(mode)
+        minibatch_data = _larcv_interface.fetch_minibatch_data(mode, pop=True, fetch_meta_data=False)
         minibatch_dims = _larcv_interface.fetch_minibatch_dims(mode)
 
         for key in minibatch_data:
@@ -269,27 +266,31 @@ for epoch in range (global_n_epochs):
 
         values, target = torch.max(minibatch_data['label'], dim=1)
 
+        '''
         acc = hu.accuracy(yhat, target, weighted=True, nclass=global_Nclass)
         train_accuracy.update(acc)
+        '''
 
-        loss = criterion(yhat, target)
+        #loss = torch.nn.functional.cross_entropy(yhat, target)
+        loss = criterion(yhat,target)
+        '''
         train_loss.update(loss)
+        '''
 
         loss.backward()
 
         optimizer.step()
 
-        net.eval()
-
-
+        '''
         print("Train.Rank,Epoch: {},{}, Iteration: {}, Loss: [{:.4g}], Accuracy: [{:.4g}]".format(hvd.rank(), 
-                                                   epoch, iteration,float(train_loss.avg), train_accuracy.avg))
+                                                   epoch, iteration,float(train_loss.avg), float(train_accuracy.avg)))
 
         output = {'Training_Validation':'Training', 'Iteration':iteration, 'Epoch':epoch, 'Loss': float(train_loss.avg),
-                  'Accuracy':train_accuracy.avg.data, "Learning Rate":learning_rate}
+                  'Accuracy':float(train_accuracy.avg.data), "Learning Rate":learning_rate}
         if hvd.rank()==0:
             history_writer.writerow(output)
             csvfile.flush()
+        '''
 
         # below is to keep this from exceeding 4 hrs
         if iteration > global_n_iterations_per_epoch:
@@ -298,11 +299,47 @@ for epoch in range (global_n_epochs):
 
 
     # done with iterations within a training epoch
-    te_epoch_size = _larcv_interface.size('test')
     net.eval()
+    for iteration in range(tr_epoch_size):
+        net.eval()
+        _larcv_interface.prepare_next(mode)
+        minibatch_data = _larcv_interface.fetch_minibatch_data(mode, pop=True, fetch_meta_data=False)
+        minibatch_dims = _larcv_interface.fetch_minibatch_dims(mode)
+
+        for key in minibatch_data:
+            if key == 'entries' or key == 'event_ids':
+                continue
+            minibatch_data[key] = np.reshape(minibatch_data[key], minibatch_dims[key])
+
+        # Strip off the primary/aux label in the keys:
+        for key in minibatch_data:
+            new_key = key.replace('aux_','')
+            minibatch_data[new_key] = minibatch_data.pop(key)            
+        
+        minibatch_data['image'] = larcvsparse_to_scnsparse_3d(minibatch_data['image'])
+        minibatch_data = to_torch(minibatch_data)
+
+        yhat = net(minibatch_data['image'])
+        
+        values, target = torch.max(minibatch_data['label'], dim=1)
+
+        acc = hu.accuracy(yhat, target, weighted=True, nclass=global_Nclass)
+        train_accuracy.update(acc)
+        loss = criterion(yhat,target)
+        train_loss.update(loss)
+
+        output = {'Training_Validation':'Training', 'Iteration':iteration, 'Epoch':epoch, 'Loss': float(train_loss.avg),
+                  'Accuracy':float(train_accuracy.avg.data), "Learning Rate":learning_rate}
+
+        if hvd.rank()==0:
+            history_writer.writerow(output)
+            csvfile.flush()
+
     for iteration in range(te_epoch_size):
         net.eval()
-        minibatch_data = _larcv_interface.fetch_minibatch_data(aux_mode, fetch_meta_data=False)
+
+        _larcv_interface.prepare_next(aux_mode)
+        minibatch_data = _larcv_interface.fetch_minibatch_data(aux_mode, pop=True, fetch_meta_data=False)
         minibatch_dims = _larcv_interface.fetch_minibatch_dims(aux_mode)
 
         for key in minibatch_data:
@@ -325,13 +362,14 @@ for epoch in range (global_n_epochs):
         acc = hu.accuracy(yhat, target, weighted=True, nclass=global_Nclass)
         val_accuracy.update(acc)
 
-        loss = criterion(yhat, target)
+        #loss = torch.nn.functional.cross_entropy(yhat, target)
+        loss = criterion(yhat,target)
         val_loss.update(loss)
 
         print("Val.Epoch: {}, Iteration: {}, Train,Val Loss: [{:.4g},{:.4g}], *** Train,Val Accuracy: [{:.4g},{:.4g}] ***".format(epoch, iteration,float(train_loss.avg), val_loss.avg, train_accuracy.avg, val_accuracy.avg ))
 
         output = {'Training_Validation':'Validation','Iteration':iteration, 'Epoch':epoch, 
-                  'Loss':float(val_loss.avg), 'Accuracy':val_accuracy.avg, "Learning Rate":learning_rate}
+                  'Loss':float(val_loss.avg), 'Accuracy':float(val_accuracy.avg), "Learning Rate":learning_rate}
 
         if hvd.rank()==0:
             history_writer.writerow(output)
@@ -349,6 +387,5 @@ except:
 print("host: hvd.rank()/hvd.local_rank() are: " + str(hostname) + ": " + str(hvd.rank())+"/"+str(hvd.local_rank()) ) 
 
 
-print("end of epoch")
-torch.save(net.state_dict(), modelfilepath+'model-scn3dsigbkd-fanal-10cm-larcv-oft.pkl')
+torch.save(net.state_dict(), modelfilepath+'model-scn3dsigbkd-fanal-10cm-larcv.pkl')
 

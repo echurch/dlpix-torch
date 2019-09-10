@@ -6,14 +6,14 @@ import numpy as np
 import pandas as pd
 from random import shuffle
 
-nevtsperfile = 500000
+nevtsperfile = 5000000
 train_frac = 0.8
 
 def main():
     # This code loops over training set files:
     top_input_path="/gpfs/alpine/proj-shared/nph133/next1t/FANAL_datafiles/"
     output_path="/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/"
-    glob_filter=["bb0nu/bb0nu-0000-ACTIVE.h5"]
+    glob_filter=["*/*.h5"]
     group_key = "/FANALIC/RECO_fwhm_07_voxel_10x10x10/voxels/"
 
     #files = glob.glob(top_input_path + glob_filter)
@@ -51,16 +51,12 @@ def main():
     idcs_train = idcs[:int(len(idcs)*train_frac)]
     idcs_test = idcs[int(len(idcs)*train_frac):]
 
-    ''' take this out !!!! '''
-    idcs_train = idcs_train[0:60]
-    idcs_test = idcs_test[0:60]
-
     print('Found %s events. Splitting into %s training and %s testing events.'%(len(idcs),len(idcs_train),len(idcs_test)))
 
     noutf_train = int(np.ceil(len(idcs_train)/nevtsperfile))
     print('Creating %s training output files'%noutf_train)
     for ifout in range(noutf_train):
-        output_trn = os.path.basename('Next1Ton_10cm_fwhm07_larcv_balanced_'+str(ifout)+'_allbb0nu_train.h5')
+        output_trn = os.path.basename('Next1Ton_10cm_fwhm07_larcv_balanced_'+str(ifout)+'_train.h5')
         output_trn = output_path + "/" + output_trn
         io_manager_trn = larcv.IOManager(larcv.IOManager.kWRITE)
         io_manager_trn.set_out_file(output_trn)
@@ -76,7 +72,7 @@ def main():
     noutf_test = int(np.ceil(len(idcs_test)/nevtsperfile))
     print('Creating %s testing output files'%noutf_test)
     for ifout in range(noutf_test):
-        output_tst = os.path.basename('Next1Ton_10cm_fwhm07_larcv_balanced_'+str(ifout)+'_allbb0nu_test.h5')
+        output_tst = os.path.basename('Next1Ton_10cm_fwhm07_larcv_balanced_'+str(ifout)+'_test.h5')
         output_tst = output_path + "/" + output_tst
         io_manager_tst = larcv.IOManager(larcv.IOManager.kWRITE)
         io_manager_tst.set_out_file(output_tst)

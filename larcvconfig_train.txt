@@ -2,7 +2,7 @@ TrainIO: {
   Verbosity: 2 
   EnableFilter: false 
   NumThreads: 6 
-  InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_fwhm07_larcv_balanced_0_allbb0nu_train.h5"]
+  InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_fwhm07_larcv_balanced_0_train.h5"]
   NumBatchStorage: 6 
   RandomSeed: 0 
   RandomAccess: 0 
