@@ -2,7 +2,7 @@ TestIO: {
   Verbosity: 2 
   EnableFilter: false 
   NumThreads: 6
-  InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_diffusion_larcv_0_1file_test.h5"]
+  InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_fwhm07_larcv_balanced_0_newl_test.h5"]
   NumBatchStorage: 6 
   RandomSeed: 0 
   RandomAccess: 0 
@@ -21,7 +21,7 @@ TestIO: {
     test_label: {
       Verbosity: 3
       ParticleProducer: label
-      PdgClassList: [0,1,2]
+      PdgClassList: [0,1]
     }
   }
 }

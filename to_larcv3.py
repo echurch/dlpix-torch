@@ -10,7 +10,7 @@ from random import shuffle
 def main():
     # This code loops over training set files:
     top_input_path="/ccs/home/kwoodruff/NEXT1Ton/preprocess/"
-    output_path="/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/"
+    output_path="/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/echurch"
     glob_filter=["bb2nu*_diffusion.h5","Bi214-00-VESSEL_diffusion.h5","Bi214-00-OUTER_PLANES_diffusion.h5"]
 
     #files = glob.glob(top_input_path + glob_filter)
@@ -60,14 +60,18 @@ def main():
     print('Converting test files')
     convert_files(io_manager_tst, next_new_meta, dfiles, idcs_test, eidcs, fidcs)
     io_manager_tst.finalize()
-
+'''
     # convert train files
     print('Converting train files')
     convert_files(io_manager_trn, next_new_meta, dfiles, idcs_train, eidcs, fidcs)
     io_manager_trn.finalize()
+'''
 
 def convert_files(io_manager, next_new_meta, dfiles, idcs, eidcs, fidcs):
-    
+    first = True
+    xb = np.arange(-300.,300.,10.)
+    zb = np.arange(-300.,300.,10.)
+
     # loop over shuffled indices
     for ishf in idcs:
 
@@ -115,6 +119,19 @@ def convert_files(io_manager, next_new_meta, dfiles, idcs, eidcs, fidcs):
         ypos = dfile['coords'][str(ievt)][1].astype(float)
         zpos = dfile['coords'][str(ievt)][2].astype(float)
 
+        if first:
+            first = False
+            xh,_ = np.histogram(xpos,bins=xb)
+            yh,_ = np.histogram(ypos,bins=xb)
+            zh,_ = np.histogram(zpos,bins=zb)
+
+        xh += np.histogram(xpos,bins=xb)[0]
+        yh += np.histogram(ypos,bins=xb)[0]
+        zh += np.histogram(zpos,bins=zb)[0]
+
+        import pdb
+#        pdb.set_trace()
+
         for ipos in range(len(xpos)):
             position[0] = xpos[ipos]
             position[1] = ypos[ipos]
@@ -132,8 +149,13 @@ def convert_files(io_manager, next_new_meta, dfiles, idcs, eidcs, fidcs):
 
         io_manager.save_entry()
 
+    np.save("xhist.npy",xh)
+    np.save("yhist.npy",yh)
+    np.save("zhist.npy",zh)
+
     return
 
 
 if __name__ == '__main__':
+
     main()

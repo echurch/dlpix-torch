@@ -27,12 +27,12 @@ torch.cuda.manual_seed(seed)
 global_Nclass = 2 # bkgd, 0vbb, 2vbb
 global_n_iterations_per_epoch = 485
 global_n_iterations_val = 52
-global_n_epochs = 40 # 36 nodes
+global_n_epochs = 50 # 48 nodes
 global_batch_size = hvd.size()*50  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 # 2.4 MeV e's/gammas shouldn't go more than ~30cm.
-nvox = int(600/vox) # num bins in x,y dimension  # using KW's shrunk-volume now in larcvsparse_to_scnsparse_3d()
-nvoxz = int(600/vox) # num bins in z dimension 
+nvox = int(2700/vox) # num bins in x,y dimension  # using KW's shrunk-volume now in larcvsparse_to_scnsparse_3d()
+nvoxz = int(2700/vox) # num bins in z dimension 
 
 
 mode = 'train'
@@ -74,6 +74,9 @@ def larcvsparse_to_scnsparse_3d(input_array):
     for i in range(len(split_tensors) - 1):
         dimension_list[i] = split_tensors[i][non_zero_inds]
 
+    '''
+    For this script variant don't shift and crop.
+
     # normalize the positions (have each event start at 0,0,0
     offset_x = [0]*len(batch_index)
     offset_y = [0]*len(batch_index)
@@ -85,11 +88,10 @@ def larcvsparse_to_scnsparse_3d(input_array):
             offset_y[j] = min(dimension_list[1][idxs.min():idxs.max()+1])
             offset_z[j] = min(dimension_list[2][idxs.min():idxs.max()+1])
 
-    # + 2 is for padding purposes
-    dimension_list[0] = dimension_list[0] - offset_x + 2
-    dimension_list[1] = dimension_list[1] - offset_y + 2
-    dimension_list[2] = dimension_list[2] - offset_z + 2 
-
+    dimension_list[0] = dimension_list[0] - offset_x
+    dimension_list[1] = dimension_list[1] - offset_y
+    dimension_list[2] = dimension_list[2] - offset_z
+    '''
 
     # Tack on the batch index to this list for stacking:
     dimension_list.append(batch_index)
@@ -131,7 +133,8 @@ class Model(nn.Module):
                 scn.SubmanifoldConvolution(dimension, nPlanes, 16,  2, False)).add(  
                 scn.SubmanifoldConvolution(dimension,      16,  16, 15, False)).add(  # Added this line. EC, 12-Oct-2019
                 scn.SubmanifoldConvolution(dimension,      16,   4,  5, False)).add(  # Added this line. EC, 12-Oct-2019
-#                    scn.MaxPooling(dimension, 3, 3)).add(
+                    scn.MaxPooling(dimension, 3, 3)).add(
+                    scn.Dropout(0.4)).add(
                     scn.SparseResNet(dimension, 4, [
                         ['b', 8, 2, 1],
                         ['b', 12, 2, 1],
@@ -139,20 +142,20 @@ class Model(nn.Module):
 #                        ['b', 32, 2, 1]])).add(
                             scn.Convolution(dimension, 16, 16, 3, 1, False)).add(
                             scn.Convolution(dimension,  16, 16, 5, 1, False)).add(
-                                scn.BatchNormELU(16)).add(
+                                scn.Dropout(0.4)).add(
+                                scn.BatchNormLeakyReLU(16)).add(
 #                                    scn.SubmanifoldConvolution(dimension, 16, 2, 3, False)).add(
                                         scn.SparseToDense(dimension, 16))
 #        self.spatial_size = self.sparseModel.input_spatial_size(torch.LongTensor([1, 1]))
 # The MaxPooling in above model striding leaves us with a dimension of nvox/3 x nvox/3 x nvoxz/3 ... and somehow -2 from padding
 
-#        self.linear = nn.Linear(16*14*14*14, 10)  ## int(16*(nvox/3-2) * (nvox/3-2) * (nvoxz/3-2)), 10)
-        self.linear = nn.Linear(int(16*54*54*54), 10)  ## int(16*(nvox/3-2) * (nvox/3-2) * (nvoxz/3-2)), 10)
+        self.linear = nn.Linear(16*84*84*84, 10)  ## int(16*(nvox/3-2) * (nvox/3-2) * (nvoxz/3-2)), 10)
         self.linear2 = nn.Linear(10, global_Nclass)
 
     def forward(self,x):
-
         x = self.sparseModel(x)
-        x = x.view(-1, int(16*54*54*54)) ## int(16*(nvox/3-2) * (nvox/3-2) * (nvoxz/3-2)) )
+
+        x = x.view(-1, 16*84*84*84) ## int(16*(nvox/3-2) * (nvox/3-2) * (nvoxz/3-2)) )
 
 #        x = nn.functional.relu(self.linear(x))
         x = self.linear(x)
@@ -168,18 +171,18 @@ criterion = torch.nn.CrossEntropyLoss()
 modelfilepath = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/models/'
 try:
     print ("Reading weights from file")
-    net.load_state_dict(torch.load(modelfilepath+'model-scn3dsigbkd-fanal-10mm-larcv.pkl'))
+    net.load_state_dict(torch.load(modelfilepath+'model-scn3dsigbkd-fanal-10mm-larcv2.pkl'))
     net.eval()
     print("Succeeded.")
 except:
     print ("Failed to read pkl model. Proceeding from scratch.")
 
 
-learning_rate = 0.10 # 0.010
+learning_rate = 0.050 # 0.010
 # Horovod: scale learning rate by the number of GPUs.
-#optimizer = optim.SGD(net.parameters(), lr=learning_rate,  ##  * hvd.size(),
-#                      momentum=0.9)
-optimizer = optim.Adam(net.parameters(), lr=learning_rate , betas=(0.9, 0.999), eps=1e-08, weight_decay=0.005)   #learning_rate*hvd.size()
+optimizer = optim.SGD(net.parameters(), lr=learning_rate,  ##  * hvd.size(),
+                      momentum=0.9)
+#optimizer = optim.Adam(net.parameters(), lr=learning_rate , betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)   #learning_rate*hvd.size()
 
 # Horovod: wrap optimizer with DistributedOptimizer.
 '''
@@ -249,7 +252,7 @@ _larcv_interface.prepare_manager(aux_mode, aux_io_config, global_batch_size, aux
 
 
 if hvd.rank()==0:
-    filename = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/'+'history-fanal-10mm-larcv.csv'
+    filename = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/'+'history-fanal-10mm-larcv2.csv'
     csvfile = open(filename,'w')
 
 
@@ -305,7 +308,7 @@ for epoch in range (global_n_epochs):
 
 
         yhat = net(minibatch_data['image'])
-#        pdb.set_trace()
+
         values, target = torch.max(minibatch_data['label'], dim=1)
 
 #        acc = hu.accuracy(yhat, target, weighted=True, nclass=global_Nclass)
@@ -447,13 +450,14 @@ for epoch in range (global_n_epochs):
 
 scfieldnames = ['Iteration', 'Class', 'Score0', 'Score1']
 if hvd.rank()==0:
-    scfilename = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/'+'history-fanal-10mm-larcv_scores.csv'
+    scfilename = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/'+'history-fanal-10mm-larcv_scores2.csv'
     sccsvfile = open(scfilename,'w')
     score_writer = csv.DictWriter(sccsvfile, fieldnames=scfieldnames)
     score_writer.writeheader()
 
 te_epoch_size = int(_larcv_interface.size('test')/global_batch_size)
 net.eval()
+
 for iteration in range(te_epoch_size):
     net.eval()
 
@@ -477,21 +481,25 @@ for iteration in range(te_epoch_size):
     yhat = net(minibatch_data['image'])
     
     values, target = torch.max(minibatch_data['label'], dim=1)
-
+    print ("Made it here 0.")
     for ievt in range(len(target)):
         targ = int(target[ievt])
+#        scr0 = float(yhat[ievt])
         scr0 = float(yhat[ievt][0])
         scr1 = float(yhat[ievt][1])
-
+        print ("Made it here 1.")
         output = {'Iteration':iteration, 'Class':targ, 'Score0':scr0, 'Score1':scr1}
         #output = {'Iteration':iteration, 'Class':targ, 'Score0':scr0}
-
-        if hvd.rank()==0:        
+        print ("Made it here 2.")
+        if hvd.rank()==0:
+            print ("Made it here 3.")
             score_writer.writerow(output)
         if iteration>=global_n_iterations_val:
+            print ("Made it here 4.")
             break # Just check val for 4 iterations and pop out
 
     if hvd.rank()==0:        
+        print ("Made it here 5.")
         sccsvfile.flush()
 
 
@@ -505,5 +513,5 @@ print("host: hvd.rank()/hvd.local_rank() are: " + str(hostname) + ": " + str(hvd
 
 
 print("end of epoch")
-torch.save(net.state_dict(), modelfilepath+'model-scn3dsigbkd-fanal-10cm-larcv.pkl')
+torch.save(net.state_dict(), modelfilepath+'model-scn3dsigbkd-fanal-10cm-larcv2.pkl')
 
