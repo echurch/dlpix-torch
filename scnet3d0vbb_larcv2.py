@@ -27,7 +27,7 @@ torch.cuda.manual_seed(seed)
 global_Nclass = 2 # bkgd, 0vbb, 2vbb
 global_n_iterations_per_epoch = 485
 global_n_iterations_val = 52
-global_n_epochs = 50 # 48 nodes
+global_n_epochs = 30 # 48 nodes
 global_batch_size = hvd.size()*50  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 # 2.4 MeV e's/gammas shouldn't go more than ~30cm.
@@ -288,7 +288,7 @@ for epoch in range (global_n_epochs):
         optimizer.zero_grad()
 
         _larcv_interface.prepare_next(mode)
-        minibatch_data = _larcv_interface.fetch_minibatch_data(mode, pop=True, fetch_meta_data=False)
+        minibatch_data = _larcv_interface.fetch_minibatch_data(mode, pop=True, fetch_meta_data=False) # from False, per Corey 17-Oct-2019
         minibatch_dims = _larcv_interface.fetch_minibatch_dims(mode)
 
 
@@ -401,8 +401,8 @@ for epoch in range (global_n_epochs):
         net.eval()
 
 
-        _larcv_interface.prepare_next(aux_mode)
-        minibatch_data = _larcv_interface.fetch_minibatch_data(aux_mode, pop=True, fetch_meta_data=False)
+        _larcv_interface.prepare_next(aux_mode)  # !! Experiment, EC 17-Oct-0219 !!! aux_mode)
+        minibatch_data = _larcv_interface.fetch_minibatch_data(aux_mode, pop=True, fetch_meta_data=False) # False
         minibatch_dims = _larcv_interface.fetch_minibatch_dims(aux_mode)
 
 
@@ -487,12 +487,11 @@ for iteration in range(te_epoch_size):
 #        scr0 = float(yhat[ievt])
         scr0 = float(yhat[ievt][0])
         scr1 = float(yhat[ievt][1])
-        print ("Made it here 1.")
         output = {'Iteration':iteration, 'Class':targ, 'Score0':scr0, 'Score1':scr1}
         #output = {'Iteration':iteration, 'Class':targ, 'Score0':scr0}
-        print ("Made it here 2.")
+
         if hvd.rank()==0:
-            print ("Made it here 3.")
+
             score_writer.writerow(output)
         if iteration>=global_n_iterations_val:
             print ("Made it here 4.")

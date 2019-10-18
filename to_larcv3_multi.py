@@ -5,15 +5,16 @@ import os
 import numpy as np
 import pandas as pd
 from random import shuffle
+import pdb
 
 nevtsperfile = 5000000
-train_frac = 0.8
+train_frac = 0.80
 
 def main():
     # This code loops over training set files:
-    top_input_path="/gpfs/alpine/proj-shared/nph133/next1t/FANAL_datafiles/"
-    output_path="/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/"
-    glob_filter=["*/*.h5"]
+    top_input_path="/gpfs/alpine/proj-shared/nph133/next1t/FANAL_datafiles/FWHM_07/"  ## Added FWHM_07, EC, 17-Oct-2019
+    output_path="/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/echurch2/"
+    glob_filter=["*/*/*.h5"]  ## Add an extra */, EC, 17-Oct-2019 
     #glob_filter=["*/*.h5"]
     group_key = "/FANALIC/RECO_fwhm_07_voxel_10x10x10/voxels/"
 
@@ -27,8 +28,9 @@ def main():
 
     # Each data file is processed independently
     dframes = []
-    for f in files:
+    for fnum,f in enumerate(files):
         try:
+            print ('Working on file ' + str(fnum) )
             dframes.append( pd.read_hdf(f,group_key) )
         except Exception:
             pass
@@ -48,6 +50,7 @@ def main():
     idcs = [ i for i in range(sum(flengths)) ]
     shuffle(idcs)
 
+
     # separate in test/train
     idcs_train = idcs[:int(len(idcs)*train_frac)]
     idcs_test = idcs[int(len(idcs)*train_frac):]
@@ -57,7 +60,7 @@ def main():
     noutf_train = int(np.ceil(len(idcs_train)/nevtsperfile))
     print('Creating %s training output files'%noutf_train)
     for ifout in range(noutf_train):
-        output_trn = os.path.basename('Next1Ton_10cm_fwhm07_larcv_'+str(ifout)+'_train.h5')
+        output_trn = os.path.basename('Next1Ton_10mm_fwhm07_larcv_'+str(ifout)+'_train.h5')
         output_trn = output_path + "/" + output_trn
         io_manager_trn = larcv.IOManager(larcv.IOManager.kWRITE)
         io_manager_trn.set_out_file(output_trn)
@@ -73,7 +76,7 @@ def main():
     noutf_test = int(np.ceil(len(idcs_test)/nevtsperfile))
     print('Creating %s testing output files'%noutf_test)
     for ifout in range(noutf_test):
-        output_tst = os.path.basename('Next1Ton_10cm_fwhm07_larcv_'+str(ifout)+'_test.h5')
+        output_tst = os.path.basename('Next1Ton_10mm_fwhm07_larcv_'+str(ifout)+'_test.h5')
         output_tst = output_path + "/" + output_tst
         io_manager_tst = larcv.IOManager(larcv.IOManager.kWRITE)
         io_manager_tst.set_out_file(output_tst)
