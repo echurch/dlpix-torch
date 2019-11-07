@@ -22,12 +22,12 @@ class Metric(object):
         self.n = torch.tensor(0.)
 
     def update(self, val):
-        self.sum += hvd.allreduce(val.detach().cpu(), name=self.name)
+        self.sum = hvd.allreduce(val.detach().cpu(), name=self.name)
         self.n += 1
 
     @property
     def avg(self):
-        return self.sum / self.n
+        return self.sum #/ self.n
 
 
 def save_checkpoint(model, optimizer, epoch, path):
@@ -43,7 +43,8 @@ def save_checkpoint(model, optimizer, epoch, path):
 
 def accuracy(output, target, weighted=True, nclass=2):
     # get the index of the max log-probability
-    pred = output.max(1, keepdim=True)[1].cpu()
+    #pred = output.max(1, keepdim=True)[1].cpu()
+    pred = torch.round(output).cpu()
     if(weighted):
         w_acc = 0.
         nnonzero = 0
