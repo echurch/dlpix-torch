@@ -1,16 +1,16 @@
-TrainIO: {
+TestIO: {
   Verbosity: 2 
   EnableFilter: false 
-  NumThreads: 6 
-  InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_fwhm07_larcv_balanced_0_noshf_train.h5"]
+  NumThreads: 6
+  InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_3mm_fwhm07_larcv_balanced_0_noshf_test.h5"]
   NumBatchStorage: 6 
   RandomSeed: 214 
   RandomAccess: 2 
   ProcessType: ["BatchFillerSparseTensor3D","BatchFillerPIDLabel"]
-  ProcessName: ["data","label"]
+  ProcessName: ["test_data","test_label"]
 
   ProcessList: {
-    data: {
+    test_data: {
       Verbosity: 3
       Tensor3DProducer: "voxels"
       IncludeValues: true
@@ -18,7 +18,7 @@ TrainIO: {
       UnfilledVoxelValue: -999
       Augment: true
     }
-    label: {
+    test_label: {
       Verbosity: 3
       ParticleProducer: label
       PdgClassList: [0,1]

@@ -25,10 +25,10 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str(hvd.local_rank())
 torch.cuda.manual_seed(seed)
 
 global_Nclass = 2 # bkgd, 0vbb, 2vbb
-global_n_iterations_per_epoch = 500
-global_n_iterations_val = 52
+global_n_iterations_per_epoch = 100
+global_n_iterations_val = 10
 global_n_epochs = 40
-global_batch_size = hvd.size()*200  ## Can be at least 32, but need this many files to pick evts from in DataLoader
+global_batch_size = hvd.size()*100  ## Can be at least 32, but need this many files to pick evts from in DataLoader
 vox = 10 # int divisor of 1500 and 1500 and 3000. Cubic voxel edge size in mm.
 nvox = int(2600/vox) # num bins in x,y dimension 
 nvoxz = int(2600/vox) # num bins in z dimension 
@@ -216,7 +216,7 @@ criterion = torch.nn.BCELoss().cuda()
 modelfilepath = os.environ['MEMBERWORK']+'/nph133/'+os.environ['USER']+'/next1t/models/'
 try:
     print ("Reading weights from file")
-    net.load_state_dict(torch.load(modelfilepath+'model-scn3dsigbkd-fanal-10cm-larcv-48gpu-nextnew.pkl'))
+    net.load_state_dict(torch.load(modelfilepath+'model-scn3dsigbkd-fanal-10cm-larcv-48gpu-tmp.pkl'))
     #net.eval()
     print("Succeeded.")
 except:
@@ -289,9 +289,9 @@ _larcv_interface.prepare_manager(mode, io_config, global_batch_size, data_keys, 
 _larcv_interface.prepare_manager(aux_mode, aux_io_config, global_batch_size, aux_data_keys, color = 0)
 
 
-historyfilepath = os.environ['PROJWORK']+'/nph133/next1t/csvout/'
+historyfilepath = os.environ['PROJWORK']+'/nph133/next1t/csvout/kwoodruff/'
 if hvd.rank()==0:
-    filename = historyfilepath+'history-fanal-10cm-larcv-48gpu-next1ton-noshf.csv'
+    filename = historyfilepath+'history-fanal-10cm-larcv-48gpu-next1ton-noshfshort.csv'
     csvfile = open(filename,'w')
 
 
@@ -468,7 +468,7 @@ for epoch in range (global_n_epochs):
 scfieldnames = ['Iteration', 'Class', 'Score0']
 
 if hvd.rank()==0:
-    scfilename = historyfilepath+'scoreeval-fanal-10cm-larcv-48gpu-next1ton-noshf.csv'
+    scfilename = historyfilepath+'scoreeval-fanal-10cm-larcv-48gpu-next1ton-tmp.csv'
     sccsvfile = open(scfilename,'w')
     score_writer = csv.DictWriter(sccsvfile, fieldnames=scfieldnames)
     score_writer.writeheader()
@@ -525,6 +525,6 @@ except:
 print("host: hvd.rank()/hvd.local_rank() are: " + str(hostname) + ": " + str(hvd.rank())+"/"+str(hvd.local_rank()) ) 
 
 if hvd.rank() == 0:
-    torch.save(net.state_dict(), modelfilepath+'model-scn3dsigbkd-fanal-10cm-larcv-48gpu-nextnew.pkl')
+    torch.save(net.state_dict(), modelfilepath+'model-scn3dsigbkd-fanal-10cm-larcv-48gpu-tmp.pkl')
     #torch.save(net, modelfilepath+'model-scn3dsigbkd-fanal-10cm-larcv_test.pkl')
 

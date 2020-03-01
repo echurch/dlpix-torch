@@ -6,20 +6,26 @@ import numpy as np
 import pandas as pd
 from random import shuffle
 
-group_key = "/FANALIC/RECO_fwhm_07_voxel_10x10x10/voxels/"
-event_key = "/FANALIC/RECO_fwhm_07_voxel_10x10x10/events/"
+group_key = "/FANALIC/RECO_fwhm_07_voxel_3x3x3/voxels/"
+event_key = "/FANALIC/RECO_fwhm_07_voxel_3x3x3/events/"
 
 def main():
     # This code loops over training set files:
     top_input_path="/gpfs/alpine/proj-shared/nph133/next1t/FANAL_datafiles/"
     output_path="/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/"
-    glob_filter_train = ["FWHM_07/train/*/*.h5"]
-    glob_filter_test = ["FWHM_07/validate/*/*.h5"]
+    #glob_filter_train = ["FWHM_07/train/Tl208/*-00{00..14}-*.h5","FWHM_07/train/Bi214/*-00{00..14}-*.h5","FWHM_07/train/bb0nu/*-00{00..25}-*.h5"]
+    #glob_filter_train = ["FWHM_07/train/Tl208/*-000[0-2]-*.h5","FWHM_07/train/Bi214/*-000[0-2]-*.h5","FWHM_07/train/bb0nu/*-000[0-4]-*.h5"]
+    glob_filter_train = ["FWHM_05/train/Tl208/*.h5","FWHM_05/train/Bi214/*.h5","FWHM_05/train/bb0nu/*.h5"]
+    #glob_filter_test = ["FWHM_07/validate/Tl208/*-008[0-2]-*.h5","FWHM_07/validate/Bi214/*-008[0-2]-*.h5","FWHM_07/validate/bb0nu/*-045[0-4]-*.h5"]
+    #glob_filter_test = ["FWHM_05/validate/Tl208/*.h5","FWHM_05/validate/Bi214/*.h5","FWHM_05/validate/bb0nu/*.h5"]
+    glob_filter_test=["FWHM_05/analyze/Bi214/FIELD_CAGE/*.h5"]
 
     #files = glob.glob(top_input_path + glob_filter)
     files_train = []
+    '''
     for gf in glob_filter_train:
         files_train.extend(glob.glob(top_input_path + gf))
+    '''
     files_test = []
     for gf in glob_filter_test:
         files_test.extend(glob.glob(top_input_path + gf))
@@ -28,11 +34,15 @@ def main():
     print('Found %s input testing files'%len(files_test))
 
     next_new_meta = larcv.ImageMeta3D()
-    next_new_meta.set_dimension(0, 2600, 260, -1300)
-    next_new_meta.set_dimension(1, 2600, 260, -1300)
-    next_new_meta.set_dimension(2, 2600, 260, -1300)
+    next_new_meta.set_dimension(0, 2600, 867, -1300)
+    next_new_meta.set_dimension(1, 2600, 867, -1300)
+    next_new_meta.set_dimension(2, 2600, 867, -1300)
+    #next_new_meta.set_dimension(0, 2600, 260, -1300)
+    #next_new_meta.set_dimension(1, 2600, 260, -1300)
+    #next_new_meta.set_dimension(2, 2600, 260, -1300)
 
-    output_trn = os.path.basename('Next1Ton_10cm_fwhm07_larcv_balanced_0_noshf_train.h5')
+    '''
+    output_trn = os.path.basename('Next1Ton_3mm_fwhm07_larcv_balanced_0_noshf_train.h5')
     output_trn = output_path + "/" + output_trn
     io_manager_trn = larcv.IOManager(larcv.IOManager.kWRITE)
     io_manager_trn.set_out_file(output_trn)
@@ -41,8 +51,9 @@ def main():
     print('Converting train files')
     convert_files(io_manager_trn, next_new_meta, files_train)
     io_manager_trn.finalize()
+    '''
 
-    output_tst = os.path.basename('Next1Ton_10cm_fwhm07_larcv_balanced_0_noshf_test.h5')
+    output_tst = os.path.basename('Next1Ton_3mm_fwhm05_larcv_bi214_fieldcage.h5')
     output_tst = output_path + "/" + output_tst
     io_manager_tst = larcv.IOManager(larcv.IOManager.kWRITE)
     io_manager_tst.set_out_file(output_tst)

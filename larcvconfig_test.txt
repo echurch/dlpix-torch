@@ -4,8 +4,8 @@ TestIO: {
   NumThreads: 6
   InputFiles: ["/gpfs/alpine/proj-shared/nph133/next1t/larcv_datafiles/Next1Ton_10cm_fwhm07_larcv_balanced_0_noshf_test.h5"]
   NumBatchStorage: 6 
-  RandomSeed: 0 
-  RandomAccess: 0 
+  RandomSeed: 214 
+  RandomAccess: 2
   ProcessType: ["BatchFillerSparseTensor3D","BatchFillerPIDLabel"]
   ProcessName: ["test_data","test_label"]
 
